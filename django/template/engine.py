@@ -60,7 +60,7 @@ class Engine(object):
         self.file_charset = file_charset
         self.libraries = libraries
         self.template_libraries = self.get_template_libraries(libraries)
-        self.builtins = self.default_builtins + builtins
+        self.builtins = self.default_builtins + list(builtins)
         self.template_builtins = self.get_template_builtins(self.builtins)
 
     @staticmethod
