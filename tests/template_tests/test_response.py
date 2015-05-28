@@ -1,19 +1,21 @@
 from __future__ import unicode_literals
 
-from datetime import datetime
-import os
 import pickle
 import time
-import warnings
+from datetime import datetime
 
-from django.test import RequestFactory, SimpleTestCase
 from django.conf import settings
-from django.template import Template, Context
-from django.template.response import (TemplateResponse, SimpleTemplateResponse,
-                                      ContentNotRenderedError)
-from django.test import override_settings
-from django.utils._os import upath
+from django.template import Context, engines
+from django.template.response import (
+    ContentNotRenderedError, SimpleTemplateResponse, TemplateResponse,
+)
+from django.test import (
+    RequestFactory, SimpleTestCase, ignore_warnings, override_settings,
+)
+from django.test.utils import require_jinja2
 from django.utils.deprecation import RemovedInDjango20Warning
+
+from .utils import TEMPLATE_DIR
 
 
 def test_processor(request):
@@ -30,7 +32,8 @@ class CustomURLConfMiddleware(object):
 class SimpleTemplateResponseTest(SimpleTestCase):
 
     def _response(self, template='foo', *args, **kwargs):
-        return SimpleTemplateResponse(Template(template), *args, **kwargs)
+        template = engines['django'].from_string(template)
+        return SimpleTemplateResponse(template, *args, **kwargs)
 
     def test_template_resolving(self):
         response = SimpleTemplateResponse('first/test.html')
@@ -59,7 +62,8 @@ class SimpleTemplateResponseTest(SimpleTestCase):
         self.assertEqual(response.content, b'foo')
 
         # rebaking doesn't change the rendered content
-        response.template_name = Template('bar{{ baz }}')
+        template = engines['django'].from_string('bar{{ baz }}')
+        response.template_name = template
         response.render()
         self.assertEqual(response.content, b'foo')
 
@@ -114,6 +118,7 @@ class SimpleTemplateResponseTest(SimpleTestCase):
         response.render()
         self.assertEqual(response.content, b'bar')
 
+    @ignore_warnings(category=RemovedInDjango20Warning)
     def test_context_instance(self):
         response = self._response('{{ foo }}{{ processors }}',
                                   Context({'foo': 'bar'}))
@@ -130,6 +135,15 @@ class SimpleTemplateResponseTest(SimpleTestCase):
         response = SimpleTemplateResponse('', {}, 'application/json', 504)
         self.assertEqual(response['content-type'], 'application/json')
         self.assertEqual(response.status_code, 504)
+
+    @require_jinja2
+    def test_using(self):
+        response = SimpleTemplateResponse('template_tests/using.html').render()
+        self.assertEqual(response.content, b'DTL\n')
+        response = SimpleTemplateResponse('template_tests/using.html', using='django').render()
+        self.assertEqual(response.content, b'DTL\n')
+        response = SimpleTemplateResponse('template_tests/using.html', using='jinja2').render()
+        self.assertEqual(response.content, b'Jinja2\n')
 
     def test_post_callbacks(self):
         "Rendering a template response triggers the post-render callbacks"
@@ -210,7 +224,7 @@ class SimpleTemplateResponseTest(SimpleTestCase):
 
 @override_settings(TEMPLATES=[{
     'BACKEND': 'django.template.backends.django.DjangoTemplates',
-    'DIRS': [os.path.join(os.path.dirname(upath(__file__)), 'templates')],
+    'DIRS': [TEMPLATE_DIR],
     'OPTIONS': {
         'context_processors': [test_processor_name],
     },
@@ -221,8 +235,9 @@ class TemplateResponseTest(SimpleTestCase):
         self.factory = RequestFactory()
 
     def _response(self, template='foo', *args, **kwargs):
-        return TemplateResponse(self.factory.get('/'), Template(template),
-                                *args, **kwargs)
+        self._request = self.factory.get('/')
+        template = engines['django'].from_string(template)
+        return TemplateResponse(self._request, template, *args, **kwargs)
 
     def test_render(self):
         response = self._response('{{ foo }}{{ processors }}').render()
@@ -233,6 +248,7 @@ class TemplateResponseTest(SimpleTestCase):
                                   {'foo': 'bar'}).render()
         self.assertEqual(response.content, b'baryes')
 
+    @ignore_warnings(category=RemovedInDjango20Warning)
     def test_render_with_context(self):
         response = self._response('{{ foo }}{{ processors }}',
                                   Context({'foo': 'bar'})).render()
@@ -256,14 +272,20 @@ class TemplateResponseTest(SimpleTestCase):
         self.assertEqual(response['content-type'], 'application/json')
         self.assertEqual(response.status_code, 504)
 
+    @require_jinja2
+    def test_using(self):
+        request = self.factory.get('/')
+        response = TemplateResponse(request, 'template_tests/using.html').render()
+        self.assertEqual(response.content, b'DTL\n')
+        response = TemplateResponse(request, 'template_tests/using.html', using='django').render()
+        self.assertEqual(response.content, b'DTL\n')
+        response = TemplateResponse(request, 'template_tests/using.html', using='jinja2').render()
+        self.assertEqual(response.content, b'Jinja2\n')
+
+    @ignore_warnings(category=RemovedInDjango20Warning)
     def test_custom_app(self):
-        with warnings.catch_warnings():
-            warnings.filterwarnings("ignore", category=RemovedInDjango20Warning)
-            response = self._response('{{ foo }}', current_app="foobar")
-
-        rc = response.resolve_context(response.context_data)
-
-        self.assertEqual(rc.request.current_app, 'foobar')
+        self._response('{{ foo }}', current_app="foobar")
+        self.assertEqual(self._request.current_app, 'foobar')
 
     def test_pickling(self):
         # Create a template response. The context is
@@ -313,7 +335,7 @@ class TemplateResponseTest(SimpleTestCase):
 
 
 @override_settings(
-    MIDDLEWARE_CLASSES=list(settings.MIDDLEWARE_CLASSES) + [
+    MIDDLEWARE_CLASSES=settings.MIDDLEWARE_CLASSES + [
         'template_tests.test_response.CustomURLConfMiddleware'
     ],
     ROOT_URLCONF='template_tests.urls',
@@ -328,7 +350,7 @@ class CustomURLConfTest(SimpleTestCase):
 
 @override_settings(
     CACHE_MIDDLEWARE_SECONDS=2.0,
-    MIDDLEWARE_CLASSES=list(settings.MIDDLEWARE_CLASSES) + [
+    MIDDLEWARE_CLASSES=settings.MIDDLEWARE_CLASSES + [
         'django.middleware.cache.FetchFromCacheMiddleware',
         'django.middleware.cache.UpdateCacheMiddleware',
     ],

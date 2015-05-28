@@ -166,8 +166,8 @@ Django apps. Just follow these conventions:
 * Setting names are in all uppercase.
 * Don't reinvent an already-existing setting.
 
-For settings that are sequences, Django itself uses tuples, rather than lists,
-but this is only a convention.
+For settings that are sequences, Django itself uses lists, but this is only
+a convention.
 
 .. _settings-without-django-settings-module:
 
@@ -188,7 +188,7 @@ Example::
 
     from django.conf import settings
 
-    settings.configure(DEBUG=True, TEMPLATE_DEBUG=True)
+    settings.configure(DEBUG=True)
 
 Pass ``configure()`` as many keyword arguments as you'd like, with each keyword
 argument representing a setting and its value. Each argument name should be all

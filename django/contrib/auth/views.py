@@ -1,25 +1,29 @@
 import warnings
 
 from django.conf import settings
-from django.core.urlresolvers import reverse
-from django.http import HttpResponseRedirect, QueryDict
-from django.template.response import TemplateResponse
-from django.utils.deprecation import RemovedInDjango20Warning
-from django.utils.http import is_safe_url, urlsafe_base64_decode
-from django.utils.translation import ugettext as _
-from django.utils.six.moves.urllib.parse import urlparse, urlunparse
-from django.shortcuts import resolve_url
-from django.views.decorators.debug import sensitive_post_parameters
-from django.views.decorators.cache import never_cache
-from django.views.decorators.csrf import csrf_protect
-
 # Avoid shadowing the login() and logout() views below.
-from django.contrib.auth import (REDIRECT_FIELD_NAME, login as auth_login,
-    logout as auth_logout, get_user_model, update_session_auth_hash)
+from django.contrib.auth import (
+    REDIRECT_FIELD_NAME, get_user_model, login as auth_login,
+    logout as auth_logout, update_session_auth_hash,
+)
 from django.contrib.auth.decorators import login_required
-from django.contrib.auth.forms import AuthenticationForm, PasswordResetForm, SetPasswordForm, PasswordChangeForm
+from django.contrib.auth.forms import (
+    AuthenticationForm, PasswordChangeForm, PasswordResetForm, SetPasswordForm,
+)
 from django.contrib.auth.tokens import default_token_generator
 from django.contrib.sites.shortcuts import get_current_site
+from django.core.urlresolvers import reverse
+from django.http import HttpResponseRedirect, QueryDict
+from django.shortcuts import resolve_url
+from django.template.response import TemplateResponse
+from django.utils.deprecation import RemovedInDjango20Warning
+from django.utils.encoding import force_text
+from django.utils.http import is_safe_url, urlsafe_base64_decode
+from django.utils.six.moves.urllib.parse import urlparse, urlunparse
+from django.utils.translation import ugettext as _
+from django.views.decorators.cache import never_cache
+from django.views.decorators.csrf import csrf_protect
+from django.views.decorators.debug import sensitive_post_parameters
 
 
 @sensitive_post_parameters()
@@ -227,7 +231,8 @@ def password_reset_confirm(request, uidb64=None, token=None,
     else:
         post_reset_redirect = resolve_url(post_reset_redirect)
     try:
-        uid = urlsafe_base64_decode(uidb64)
+        # urlsafe_base64_decode() decodes to bytestring on Python 3
+        uid = force_text(urlsafe_base64_decode(uidb64))
         user = UserModel._default_manager.get(pk=uid)
     except (TypeError, ValueError, OverflowError, UserModel.DoesNotExist):
         user = None

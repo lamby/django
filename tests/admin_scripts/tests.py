@@ -1,11 +1,10 @@
 # -*- coding: utf-8 -*-
-from __future__ import unicode_literals
-
 """
 A series of tests to establish that the command-line management tools work as
-advertised - especially with regards to the handling of the DJANGO_SETTINGS_MODULE
-and default settings.py files.
+advertised - especially with regards to the handling of the
+DJANGO_SETTINGS_MODULE and default settings.py files.
 """
+from __future__ import unicode_literals
 
 import codecs
 import os
@@ -14,27 +13,32 @@ import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import unittest
-import warnings
 
 import django
 from django import conf, get_version
 from django.conf import settings
-from django.core.exceptions import ImproperlyConfigured
-from django.core.management import BaseCommand, CommandError, call_command, color
-from django.utils.encoding import force_text
-from django.utils._os import npath, upath
-from django.utils.six import StringIO
-from django.test import LiveServerTestCase, TestCase, override_settings
+from django.core.management import (
+    BaseCommand, CommandError, call_command, color,
+)
+from django.db import ConnectionHandler
+from django.db.migrations.exceptions import MigrationSchemaMissing
+from django.db.migrations.recorder import MigrationRecorder
+from django.test import (
+    LiveServerTestCase, SimpleTestCase, mock, override_settings,
+)
 from django.test.runner import DiscoverRunner
+from django.utils._os import npath, upath
+from django.utils.encoding import force_text
+from django.utils.six import StringIO
 
-
-test_dir = os.path.realpath(os.path.join(os.environ['DJANGO_TEST_TEMP_DIR'], 'test_project'))
+test_dir = os.path.realpath(os.path.join(tempfile.gettempdir(), 'test_project'))
 if not os.path.exists(test_dir):
     os.mkdir(test_dir)
     open(os.path.join(test_dir, '__init__.py'), 'w').close()
 
-custom_templates_dir = os.path.join(os.path.dirname(__file__), 'custom_templates')
+custom_templates_dir = os.path.join(os.path.dirname(upath(__file__)), 'custom_templates')
 SYSTEM_CHECK_MSG = 'System check identified no issues'
 
 
@@ -115,7 +119,7 @@ class AdminScriptTestCase(unittest.TestCase):
     def run_test(self, script, args, settings_file=None, apps=None):
         base_dir = os.path.dirname(test_dir)
         # The base dir for Django's tests is one level up.
-        tests_dir = os.path.dirname(os.path.dirname(__file__))
+        tests_dir = os.path.dirname(os.path.dirname(upath(__file__)))
         # The base dir for Django is one level above the test dir. We don't use
         # `import django` to figure that out, so we don't pick up a Django
         # from site-packages or similar.
@@ -320,13 +324,6 @@ class DjangoAdminFullPathDefaultSettings(AdminScriptTestCase):
         out, err = self.run_django_admin(args)
         self.assertNoOutput(err)
         self.assertOutput(out, SYSTEM_CHECK_MSG)
-
-    def test_sqlclear_builtin_with_settings(self):
-        "fulldefault: django-admin builtin commands succeed if a setting file is provided"
-        args = ['sqlclear', '--settings=test_project.settings', 'complex_app']
-        out, err = self.run_django_admin(args)
-        self.assertNoOutput(err)
-        self.assertOutput(out, '-- App creates no tables in the database. Nothing to do.')
 
     def test_builtin_with_environment(self):
         "fulldefault: django-admin builtin commands succeed if the environment contains settings"
@@ -1255,7 +1252,8 @@ class ManageRunserver(AdminScriptTestCase):
         def monkey_run(*args, **options):
             return
 
-        self.cmd = Command()
+        self.output = StringIO()
+        self.cmd = Command(stdout=self.output)
         self.cmd.run = monkey_run
 
     def assertServerSettings(self, addr, port, ipv6=None, raw_ipv6=False):
@@ -1306,6 +1304,26 @@ class ManageRunserver(AdminScriptTestCase):
         self.cmd.handle(addrport="deadbeef:7654")
         self.assertServerSettings('deadbeef', '7654')
 
+    def test_no_database(self):
+        """
+        Ensure runserver.check_migrations doesn't choke on empty DATABASES.
+        """
+        tested_connections = ConnectionHandler({})
+        with mock.patch('django.core.management.commands.runserver.connections', new=tested_connections):
+            self.cmd.check_migrations()
+
+    def test_readonly_database(self):
+        """
+        Ensure runserver.check_migrations doesn't choke when a database is read-only
+        (with possibly no django_migrations table).
+        """
+        with mock.patch.object(
+                MigrationRecorder, 'ensure_schema',
+                side_effect=MigrationSchemaMissing()):
+            self.cmd.check_migrations()
+        # Check a warning is emitted
+        self.assertIn("Not checking migrations", self.output.getvalue())
+
 
 class ManageRunserverEmptyAllowedHosts(AdminScriptTestCase):
     def setUp(self):
@@ -1321,6 +1339,21 @@ class ManageRunserverEmptyAllowedHosts(AdminScriptTestCase):
         out, err = self.run_manage(['runserver'])
         self.assertNoOutput(out)
         self.assertOutput(err, 'CommandError: You must set settings.ALLOWED_HOSTS if DEBUG is False.')
+
+
+class ManageTestserver(AdminScriptTestCase):
+    from django.core.management.commands.testserver import Command as TestserverCommand
+
+    @mock.patch.object(TestserverCommand, 'handle')
+    def test_testserver_handle_params(self, mock_handle):
+        out = StringIO()
+        call_command('testserver', 'blah.json', stdout=out)
+        mock_handle.assert_called_with(
+            'blah.json',
+            stdout=out, settings=None, pythonpath=None, verbosity=1,
+            traceback=False, addrport='', no_color=False, use_ipv6=False,
+            skip_checks=True, interactive=True,
+        )
 
 
 ##########################################################################
@@ -1386,7 +1419,6 @@ class CommandTypes(AdminScriptTestCase):
         out, err = self.run_manage(args)
         self.assertNoOutput(err)
         self.assertOutput(out, "Checks the entire Django project for potential problems.")
-        self.assertEqual(out.count('optional arguments'), 1)
 
     def test_color_style(self):
         style = color.no_style()
@@ -1581,6 +1613,19 @@ class CommandTypes(AdminScriptTestCase):
         with self.assertRaises(SystemExit):
             command.run_from_argv(['', ''])
 
+    def test_run_from_argv_closes_connections(self):
+        """
+        A command called from the command line should close connections after
+        being executed (#21255).
+        """
+        command = BaseCommand(stderr=StringIO())
+        command.check = lambda: []
+        command.handle = lambda *args, **kwargs: args
+        with mock.patch('django.core.management.base.connections') as mock_connections:
+            command.run_from_argv(['', ''])
+        # Test connections have been closed
+        self.assertTrue(mock_connections.close_all.called)
+
     def test_noargs(self):
         "NoArg Commands can be executed"
         args = ['noargs_command']
@@ -1651,14 +1696,8 @@ class CommandTypes(AdminScriptTestCase):
         self.assertOutput(out, "EXECUTE:LabelCommand label=testlabel, options=[('no_color', False), ('pythonpath', None), ('settings', None), ('traceback', False), ('verbosity', 1)]")
         self.assertOutput(out, "EXECUTE:LabelCommand label=anotherlabel, options=[('no_color', False), ('pythonpath', None), ('settings', None), ('traceback', False), ('verbosity', 1)]")
 
-    def test_requires_model_validation_and_requires_system_checks_both_defined(self):
-        with warnings.catch_warnings(record=True):
-            warnings.filterwarnings('ignore', module='django.core.management.base')
-            from .management.commands.validation_command import InvalidCommand
-            self.assertRaises(ImproperlyConfigured, InvalidCommand)
 
-
-class Discovery(TestCase):
+class Discovery(SimpleTestCase):
 
     def test_precedence(self):
         """

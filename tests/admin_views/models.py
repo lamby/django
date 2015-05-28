@@ -2,14 +2,15 @@
 from __future__ import unicode_literals
 
 import datetime
-import tempfile
 import os
+import tempfile
 
 from django.contrib.auth.models import User
 from django.contrib.contenttypes.fields import (
-    GenericForeignKey, GenericRelation
+    GenericForeignKey, GenericRelation,
 )
 from django.contrib.contenttypes.models import ContentType
+from django.core.exceptions import ValidationError
 from django.core.files.storage import FileSystemStorage
 from django.db import models
 from django.utils.encoding import python_2_unicode_compatible
@@ -22,6 +23,13 @@ class Section(models.Model):
     """
     name = models.CharField(max_length=100)
 
+    @property
+    def name_property(self):
+        """
+        A property that simply returns the name. Used to test #24461
+        """
+        return self.name
+
 
 @python_2_unicode_compatible
 class Article(models.Model):
@@ -32,6 +40,7 @@ class Article(models.Model):
     content = models.TextField()
     date = models.DateTimeField()
     section = models.ForeignKey(Section, null=True, blank=True)
+    sub_section = models.ForeignKey(Section, null=True, blank=True, on_delete=models.SET_NULL, related_name='+')
 
     def __str__(self):
         return self.title
@@ -303,10 +312,18 @@ class Vodcast(Media):
 class Parent(models.Model):
     name = models.CharField(max_length=128)
 
+    def clean(self):
+        if self.name == '_invalid':
+            raise ValidationError('invalid')
+
 
 class Child(models.Model):
     parent = models.ForeignKey(Parent, editable=False)
     name = models.CharField(max_length=30, blank=True)
+
+    def clean(self):
+        if self.name == '_invalid':
+            raise ValidationError('invalid')
 
 
 @python_2_unicode_compatible
@@ -315,7 +332,7 @@ class EmptyModel(models.Model):
         return "Primary key = %s" % self.id
 
 
-temp_storage = FileSystemStorage(tempfile.mkdtemp(dir=os.environ['DJANGO_TEST_TEMP_DIR']))
+temp_storage = FileSystemStorage(tempfile.mkdtemp())
 UPLOAD_TO = os.path.join(temp_storage.location, 'test_upload')
 
 
@@ -545,7 +562,7 @@ class Pizza(models.Model):
 
 
 class Album(models.Model):
-    owner = models.ForeignKey(User)
+    owner = models.ForeignKey(User, null=True, blank=True, on_delete=models.SET_NULL)
     title = models.CharField(max_length=30)
 
 

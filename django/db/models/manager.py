@@ -1,10 +1,9 @@
 import copy
-from importlib import import_module
 import inspect
+from importlib import import_module
 
 from django.db import router
 from django.db.models.query import QuerySet
-from django.db.models.fields import FieldDoesNotExist
 from django.utils import six
 from django.utils.encoding import python_2_unicode_compatible
 
@@ -23,15 +22,12 @@ def ensure_default_manager(cls):
         setattr(cls, 'objects', SwappedManagerDescriptor(cls))
         return
     if not getattr(cls, '_default_manager', None):
-        # Create the default manager, if needed.
-        try:
-            cls._meta.get_field('objects')
+        if any(f.name == 'objects' for f in cls._meta.fields):
             raise ValueError(
                 "Model %s must specify a custom Manager, because it has a "
                 "field named 'objects'" % cls.__name__
             )
-        except FieldDoesNotExist:
-            pass
+        # Create the default manager, if needed.
         cls.add_to_class('objects', Manager())
         cls._base_manager = cls.objects
     elif not getattr(cls, '_base_manager', None):
@@ -80,9 +76,7 @@ class BaseManager(object):
 
     def __str__(self):
         """ Return "app_label.model_label.manager_name". """
-        model = self.model
-        app = model._meta.app_label
-        return '%s.%s.%s' % (app, model._meta.object_name, self.name)
+        return '%s.%s' % (self.model._meta.label, self.name)
 
     def deconstruct(self):
         """
@@ -92,7 +86,7 @@ class BaseManager(object):
         Raises a ValueError if the manager is dynamically generated.
         """
         qs_class = self._queryset_class
-        if getattr(self, '_built_as_manager', False):
+        if getattr(self, '_built_with_as_manager', False):
             # using MyQuerySet.as_manager()
             return (
                 True,  # as_manager

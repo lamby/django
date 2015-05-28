@@ -1,7 +1,6 @@
 from __future__ import unicode_literals
 
 import copy
-import os
 import re
 import sys
 from io import BytesIO
@@ -14,12 +13,13 @@ from django.core.exceptions import DisallowedHost, ImproperlyConfigured
 from django.core.files import uploadhandler
 from django.http.multipartparser import MultiPartParser, MultiPartParserError
 from django.utils import six
-from django.utils.datastructures import MultiValueDict, ImmutableList
+from django.utils.datastructures import ImmutableList, MultiValueDict
 from django.utils.encoding import (
-    force_bytes, force_text, force_str, escape_uri_path, iri_to_uri,
+    escape_uri_path, force_bytes, force_str, force_text, iri_to_uri,
 )
-from django.utils.six.moves.urllib.parse import parse_qsl, urlencode, quote, urljoin, urlsplit
-
+from django.utils.six.moves.urllib.parse import (
+    parse_qsl, quote, urlencode, urljoin, urlsplit,
+)
 
 RAISE_ERROR = object()
 host_validation_re = re.compile(r"^([a-z0-9.-]+|\[[a-f0-9]*:[a-f0-9:]+\])(:\d+)?$")
@@ -99,11 +99,12 @@ class HttpRequest(object):
                 msg += " The domain name provided is not valid according to RFC 1034/1035."
             raise DisallowedHost(msg)
 
-    def get_full_path(self):
+    def get_full_path(self, force_append_slash=False):
         # RFC 3986 requires query string arguments to be in the ASCII range.
         # Rather than crash if this doesn't happen, we encode defensively.
-        return '%s%s' % (
+        return '%s%s%s' % (
             escape_uri_path(self.path),
+            '/' if force_append_slash and not self.path.endswith('/') else '',
             ('?' + iri_to_uri(self.META.get('QUERY_STRING', ''))) if self.META.get('QUERY_STRING', '') else ''
         )
 
@@ -156,11 +157,14 @@ class HttpRequest(object):
         return iri_to_uri(location)
 
     def _get_scheme(self):
-        return 'https' if os.environ.get("HTTPS") == "on" else 'http'
+        """
+        Hook for subclasses like WSGIRequest to implement. Returns 'http' by
+        default.
+        """
+        return 'http'
 
     @property
     def scheme(self):
-        # First, check the SECURE_PROXY_SSL_HEADER setting.
         if settings.SECURE_PROXY_SSL_HEADER:
             try:
                 header, value = settings.SECURE_PROXY_SSL_HEADER
@@ -168,10 +172,8 @@ class HttpRequest(object):
                 raise ImproperlyConfigured(
                     'The SECURE_PROXY_SSL_HEADER setting must be a tuple containing two values.'
                 )
-            if self.META.get(header, None) == value:
+            if self.META.get(header) == value:
                 return 'https'
-        # Failing that, fall back to _get_scheme(), which is a hook for
-        # subclasses to implement.
         return self._get_scheme()
 
     def is_secure(self):

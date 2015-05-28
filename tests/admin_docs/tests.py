@@ -1,19 +1,34 @@
+import datetime
 import sys
 import unittest
 
 from django.conf import settings
-from django.contrib.sites.models import Site
 from django.contrib.admindocs import utils
 from django.contrib.admindocs.views import get_return_data_type
 from django.contrib.auth.models import User
+from django.contrib.sites.models import Site
 from django.core.urlresolvers import reverse
 from django.test import TestCase, modify_settings, override_settings
+from django.test.utils import captured_stderr
 
-from .models import Person, Company
+from .models import Company, Person
+
+
+class TestDataMixin(object):
+
+    @classmethod
+    def setUpTestData(cls):
+        # password = "secret"
+        User.objects.create(
+            pk=100, username='super', first_name='Super', last_name='User', email='super@example.com',
+            password='sha1$995a3$6011485ea3834267d719b4c801409b8b1ddd0158', is_active=True, is_superuser=True,
+            is_staff=True, last_login=datetime.datetime(2007, 5, 30, 13, 20, 10),
+            date_joined=datetime.datetime(2007, 5, 30, 13, 20, 10)
+        )
 
 
 @override_settings(
-    PASSWORD_HASHERS=('django.contrib.auth.hashers.SHA1PasswordHasher',),
+    PASSWORD_HASHERS=['django.contrib.auth.hashers.SHA1PasswordHasher'],
     ROOT_URLCONF='admin_docs.urls')
 @modify_settings(INSTALLED_APPS={'append': 'django.contrib.admindocs'})
 class AdminDocsTestCase(TestCase):
@@ -39,8 +54,7 @@ class MiscTests(AdminDocsTestCase):
 
 
 @unittest.skipUnless(utils.docutils_is_available, "no docutils installed.")
-class AdminDocViewTests(AdminDocsTestCase):
-    fixtures = ['data.xml']
+class AdminDocViewTests(TestDataMixin, AdminDocsTestCase):
 
     def setUp(self):
         self.client.login(username='super', password='secret')
@@ -124,8 +138,7 @@ class AdminDocViewTests(AdminDocsTestCase):
             utils.docutils_is_available = True
 
 
-class XViewMiddlewareTest(AdminDocsTestCase):
-    fixtures = ['data.xml']
+class XViewMiddlewareTest(TestDataMixin, AdminDocsTestCase):
 
     def test_xview_func(self):
         user = User.objects.get(username='super')
@@ -201,18 +214,15 @@ class DefaultRoleTest(AdminDocsTestCase):
 
 
 @unittest.skipUnless(utils.docutils_is_available, "no docutils installed.")
-class TestModelDetailView(AdminDocsTestCase):
+class TestModelDetailView(TestDataMixin, AdminDocsTestCase):
     """
     Tests that various details render correctly
     """
 
-    fixtures = ['data.xml']
-
     def setUp(self):
         self.client.login(username='super', password='secret')
-        self.response = self.client.get(
-            reverse('django-admindocs-models-detail',
-                    args=['admin_docs', 'person']))
+        with captured_stderr() as self.docutils_stderr:
+            self.response = self.client.get(reverse('django-admindocs-models-detail', args=['admin_docs', 'person']))
 
     def test_method_excludes(self):
         """
@@ -278,6 +288,29 @@ class TestModelDetailView(AdminDocsTestCase):
         self.assertContains(
             self.response,
             "all related %s objects" % (link % ("admin_docs.group", "admin_docs.Group"))
+        )
+
+        # "raw" and "include" directives are disabled
+        self.assertContains(self.response, '<p>&quot;raw&quot; directive disabled.</p>',)
+        self.assertContains(self.response, '.. raw:: html\n    :file: admin_docs/evilfile.txt')
+        self.assertContains(self.response, '<p>&quot;include&quot; directive disabled.</p>',)
+        self.assertContains(self.response, '.. include:: admin_docs/evilfile.txt')
+        out = self.docutils_stderr.getvalue()
+        self.assertIn('"raw" directive disabled', out)
+        self.assertIn('"include" directive disabled', out)
+
+    def test_model_with_many_to_one(self):
+        link = '<a class="reference external" href="/admindocs/models/%s/">%s</a>'
+        response = self.client.get(
+            reverse('django-admindocs-models-detail', args=['admin_docs', 'company'])
+        )
+        self.assertContains(
+            response,
+            "number of related %s objects" % (link % ("admin_docs.person", "admin_docs.Person"))
+        )
+        self.assertContains(
+            response,
+            "all related %s objects" % (link % ("admin_docs.person", "admin_docs.Person"))
         )
 
     def test_model_with_no_backward_relations_render_only_relevant_fields(self):

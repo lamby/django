@@ -1,26 +1,31 @@
-from contextlib import contextmanager
 import logging
 import re
 import sys
 import time
-from unittest import skipUnless
 import warnings
+from contextlib import contextmanager
 from functools import wraps
-from xml.dom.minidom import parseString, Node
+from unittest import skipIf, skipUnless
+from xml.dom.minidom import Node, parseString
 
 from django.apps import apps
-from django.conf import settings, UserSettingsHolder
+from django.conf import UserSettingsHolder, settings
 from django.core import mail
 from django.core.signals import request_started
+from django.core.urlresolvers import get_script_prefix, set_script_prefix
 from django.db import reset_queries
 from django.http import request
 from django.template import Template
-from django.template.loaders import locmem
-from django.test.signals import template_rendered, setting_changed
+from django.test.signals import setting_changed, template_rendered
 from django.utils import six
-from django.utils.deprecation import RemovedInDjango19Warning, RemovedInDjango20Warning
+from django.utils.decorators import ContextDecorator
 from django.utils.encoding import force_str
 from django.utils.translation import deactivate
+
+try:
+    import jinja2
+except ImportError:
+    jinja2 = None
 
 
 __all__ = (
@@ -143,16 +148,6 @@ def get_runner(settings, test_runner_class=None):
     test_module = __import__(test_module_name, {}, {}, force_str(test_path[-1]))
     test_runner = getattr(test_module, test_path[-1])
     return test_runner
-
-
-class TestTemplateLoader(locmem.Loader):
-
-    def __init__(self, *args, **kwargs):
-        warnings.warn(
-            "django.test.utils.TestTemplateLoader was renamed to "
-            "django.template.loaders.locmem.Loader.",
-            RemovedInDjango19Warning, stacklevel=2)
-        super(TestTemplateLoader, self).__init__(*args, **kwargs)
 
 
 class override_settings(object):
@@ -432,27 +427,40 @@ class CaptureQueriesContext(object):
         self.final_queries = len(self.connection.queries_log)
 
 
-class IgnoreDeprecationWarningsMixin(object):
-    warning_classes = [RemovedInDjango19Warning]
+class ignore_warnings(object):
+    def __init__(self, **kwargs):
+        self.ignore_kwargs = kwargs
+        if 'message' in self.ignore_kwargs or 'module' in self.ignore_kwargs:
+            self.filter_func = warnings.filterwarnings
+        else:
+            self.filter_func = warnings.simplefilter
 
-    def setUp(self):
-        super(IgnoreDeprecationWarningsMixin, self).setUp()
-        self.catch_warnings = warnings.catch_warnings()
-        self.catch_warnings.__enter__()
-        for warning_class in self.warning_classes:
-            warnings.filterwarnings("ignore", category=warning_class)
+    def __call__(self, decorated):
+        if isinstance(decorated, type):
+            # A class is decorated
+            saved_setUp = decorated.setUp
+            saved_tearDown = decorated.tearDown
 
-    def tearDown(self):
-        self.catch_warnings.__exit__(*sys.exc_info())
-        super(IgnoreDeprecationWarningsMixin, self).tearDown()
+            def setUp(inner_self):
+                self.catch_warnings = warnings.catch_warnings()
+                self.catch_warnings.__enter__()
+                self.filter_func('ignore', **self.ignore_kwargs)
+                saved_setUp(inner_self)
 
+            def tearDown(inner_self):
+                saved_tearDown(inner_self)
+                self.catch_warnings.__exit__(*sys.exc_info())
 
-class IgnorePendingDeprecationWarningsMixin(IgnoreDeprecationWarningsMixin):
-        warning_classes = [RemovedInDjango20Warning]
-
-
-class IgnoreAllDeprecationWarningsMixin(IgnoreDeprecationWarningsMixin):
-        warning_classes = [RemovedInDjango20Warning, RemovedInDjango19Warning]
+            decorated.setUp = setUp
+            decorated.tearDown = tearDown
+            return decorated
+        else:
+            @wraps(decorated)
+            def inner(*args, **kwargs):
+                with warnings.catch_warnings():
+                    self.filter_func('ignore', **self.ignore_kwargs)
+                    return decorated(*args, **kwargs)
+            return inner
 
 
 @contextmanager
@@ -572,3 +580,54 @@ def freeze_time(t):
         yield
     finally:
         time.time = _real_time
+
+
+def require_jinja2(test_func):
+    """
+    Decorator to enable a Jinja2 template engine in addition to the regular
+    Django template engine for a test or skip it if Jinja2 isn't available.
+    """
+    test_func = skipIf(jinja2 is None, "this test requires jinja2")(test_func)
+    test_func = override_settings(TEMPLATES=[{
+        'BACKEND': 'django.template.backends.django.DjangoTemplates',
+        'APP_DIRS': True,
+    }, {
+        'BACKEND': 'django.template.backends.jinja2.Jinja2',
+        'APP_DIRS': True,
+        'OPTIONS': {'keep_trailing_newline': True},
+    }])(test_func)
+    return test_func
+
+
+class ScriptPrefix(ContextDecorator):
+    def __enter__(self):
+        set_script_prefix(self.prefix)
+
+    def __exit__(self, exc_type, exc_val, traceback):
+        set_script_prefix(self.old_prefix)
+
+    def __init__(self, prefix):
+        self.prefix = prefix
+        self.old_prefix = get_script_prefix()
+
+
+def override_script_prefix(prefix):
+    """
+    Decorator or context manager to temporary override the script prefix.
+    """
+    return ScriptPrefix(prefix)
+
+
+class LoggingCaptureMixin(object):
+    """
+    Capture the output from the 'django' logger and store it on the class's
+    logger_output attribute.
+    """
+    def setUp(self):
+        self.logger = logging.getLogger('django')
+        self.old_stream = self.logger.handlers[0].stream
+        self.logger_output = six.StringIO()
+        self.logger.handlers[0].stream = self.logger_output
+
+    def tearDown(self):
+        self.logger.handlers[0].stream = self.old_stream

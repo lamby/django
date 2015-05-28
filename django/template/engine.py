@@ -1,16 +1,15 @@
 import warnings
 
 from django.core.exceptions import ImproperlyConfigured
-from django.utils import lru_cache
-from django.utils import six
+from django.utils import lru_cache, six
 from django.utils.deprecation import RemovedInDjango20Warning
 from django.utils.functional import cached_property
 from django.utils.module_loading import import_string
 
-from . import engines
-from .base import Context, Lexer, Parser, Template, TemplateDoesNotExist
+from .base import Context, Template
 from .context import _builtin_context_processors
-
+from .exceptions import TemplateDoesNotExist
+from .library import import_library
 
 _context_instance_undefined = object()
 _dictionary_undefined = object()
@@ -18,11 +17,16 @@ _dirs_undefined = object()
 
 
 class Engine(object):
+    default_builtins = [
+        'django.template.defaulttags',
+        'django.template.defaultfilters',
+        'django.template.loader_tags',
+    ]
 
     def __init__(self, dirs=None, app_dirs=False,
                  allowed_include_roots=None, context_processors=None,
                  debug=False, loaders=None, string_if_invalid='',
-                 file_charset='utf-8'):
+                 file_charset='utf-8', libraries=None, builtins=None):
         if dirs is None:
             dirs = []
         if allowed_include_roots is None:
@@ -37,6 +41,10 @@ class Engine(object):
             if app_dirs:
                 raise ImproperlyConfigured(
                     "app_dirs must not be set when loaders is defined.")
+        if libraries is None:
+            libraries = {}
+        if builtins is None:
+            builtins = []
 
         if isinstance(allowed_include_roots, six.string_types):
             raise ImproperlyConfigured(
@@ -50,6 +58,10 @@ class Engine(object):
         self.loaders = loaders
         self.string_if_invalid = string_if_invalid
         self.file_charset = file_charset
+        self.libraries = libraries
+        self.template_libraries = self.get_template_libraries(libraries)
+        self.builtins = self.default_builtins + builtins
+        self.template_builtins = self.get_template_builtins(self.builtins)
 
     @staticmethod
     @lru_cache.lru_cache()
@@ -68,8 +80,10 @@ class Engine(object):
         >>> template.render(context)
         'Hello world!'
         """
-        # Since DjangoTemplates is a wrapper around this Engine class, a local
-        # import is mandatory to avoid an import loop.
+        # Since Engine is imported in django.template and since
+        # DjangoTemplates is a wrapper around this Engine class,
+        # local imports are required to avoid import loops.
+        from django.template import engines
         from django.template.backends.django import DjangoTemplates
         django_engines = [engine for engine in engines.all()
                           if isinstance(engine, DjangoTemplates)]
@@ -89,6 +103,15 @@ class Engine(object):
         context_processors = _builtin_context_processors
         context_processors += tuple(self.context_processors)
         return tuple(import_string(path) for path in context_processors)
+
+    def get_template_builtins(self, builtins):
+        return [import_library(x) for x in builtins]
+
+    def get_template_libraries(self, libraries):
+        loaded = {}
+        for name, path in libraries.items():
+            loaded[name] = import_library(path)
+        return loaded
 
     @cached_property
     def template_loaders(self):
@@ -120,31 +143,30 @@ class Engine(object):
                     "instead of django.template.loaders.base.Loader. " %
                     loader, RemovedInDjango20Warning, stacklevel=2)
 
-            loader_instance = loader_class(*args)
-
-            if not loader_instance.is_usable:
-                warnings.warn(
-                    "Your template loaders configuration includes %r, but "
-                    "your Python installation doesn't support that type of "
-                    "template loading. Consider removing that line from "
-                    "your settings." % loader)
-                return None
-            else:
-                return loader_instance
-
+            return loader_class(*args)
         else:
             raise ImproperlyConfigured(
                 "Invalid value in template loaders configuration: %r" % loader)
 
-    def find_template(self, name, dirs=None):
+    def find_template(self, name, dirs=None, skip=None):
+        tried = []
         for loader in self.template_loaders:
-            try:
-                source, display_name = loader(name, dirs)
-                origin = self.make_origin(display_name, loader, name, dirs)
-                return source, origin
-            except TemplateDoesNotExist:
-                pass
-        raise TemplateDoesNotExist(name)
+            if loader.supports_recursion:
+                try:
+                    template = loader.get_template(
+                        name, template_dirs=dirs, skip=skip,
+                    )
+                    return template, template.origin
+                except TemplateDoesNotExist as e:
+                    tried.extend(e.tried)
+            else:
+                # RemovedInDjango21Warning: Use old api for non-recursive
+                # loaders.
+                try:
+                    return loader(name, dirs)
+                except TemplateDoesNotExist:
+                    pass
+        raise TemplateDoesNotExist(name, tried=tried)
 
     def from_string(self, template_code):
         """
@@ -171,16 +193,16 @@ class Engine(object):
             template = Template(template, origin, template_name, engine=self)
         return template
 
+    # This method was originally a function defined in django.template.loader.
+    # It was moved here in Django 1.8 when encapsulating the Django template
+    # engine in this Engine class. It's still called by deprecated code but it
+    # will be removed in Django 2.0. It's superseded by a new render_to_string
+    # function in django.template.loader.
+
     def render_to_string(self, template_name, context=None,
                          context_instance=_context_instance_undefined,
                          dirs=_dirs_undefined,
                          dictionary=_dictionary_undefined):
-        """
-        Loads the given template_name and renders it with the given dictionary as
-        context. The template_name may be a string to load a single template using
-        get_template, or it may be a tuple to use select_template to find one of
-        the templates in the list. Returns a string.
-        """
         if context_instance is _context_instance_undefined:
             context_instance = None
         else:
@@ -246,25 +268,3 @@ class Engine(object):
                 continue
         # If we get here, none of the templates could be loaded
         raise TemplateDoesNotExist(', '.join(not_found))
-
-    def compile_string(self, template_string, origin):
-        """
-        Compiles template_string into a NodeList ready for rendering.
-        """
-        if self.debug:
-            from .debug import DebugLexer, DebugParser
-            lexer_class, parser_class = DebugLexer, DebugParser
-        else:
-            lexer_class, parser_class = Lexer, Parser
-        lexer = lexer_class(template_string, origin)
-        tokens = lexer.tokenize()
-        parser = parser_class(tokens)
-        return parser.parse()
-
-    def make_origin(self, display_name, loader, name, dirs):
-        if self.debug and display_name:
-            # Inner import to avoid circular dependency
-            from .loader import LoaderOrigin
-            return LoaderOrigin(display_name, loader, name, dirs)
-        else:
-            return None

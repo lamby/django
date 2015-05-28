@@ -4,9 +4,9 @@
 # Uses whatever cache backend is set in the test settings file.
 from __future__ import unicode_literals
 
+import copy
 import os
 import re
-import copy
 import shutil
 import tempfile
 import threading
@@ -15,37 +15,39 @@ import unittest
 import warnings
 
 from django.conf import settings
-from django.core import management
-from django.core import signals
-from django.core.cache import (cache, caches, CacheKeyWarning,
-    InvalidCacheBackendError, DEFAULT_CACHE_ALIAS, get_cache,
-    close_caches)
-from django.db import connection, connections, transaction
+from django.core import management, signals
+from django.core.cache import (
+    DEFAULT_CACHE_ALIAS, CacheKeyWarning, cache, caches,
+)
 from django.core.cache.utils import make_template_fragment_key
-from django.http import HttpResponse, StreamingHttpResponse
-from django.middleware.cache import (FetchFromCacheMiddleware,
-    UpdateCacheMiddleware, CacheMiddleware)
+from django.db import connection, connections, transaction
+from django.http import HttpRequest, HttpResponse, StreamingHttpResponse
+from django.middleware.cache import (
+    CacheMiddleware, FetchFromCacheMiddleware, UpdateCacheMiddleware,
+)
 from django.middleware.csrf import CsrfViewMiddleware
-from django.template import Template
+from django.template import engines
 from django.template.context_processors import csrf
 from django.template.response import TemplateResponse
-from django.test import TestCase, TransactionTestCase, RequestFactory, override_settings
+from django.test import (
+    RequestFactory, SimpleTestCase, TestCase, TransactionTestCase,
+    override_settings,
+)
 from django.test.signals import setting_changed
-from django.test.utils import IgnoreDeprecationWarningsMixin
-from django.utils import six
-from django.utils import timezone
-from django.utils import translation
-from django.utils.cache import (patch_vary_headers, get_cache_key,
-    learn_cache_key, patch_cache_control, patch_response_headers)
+from django.utils import six, timezone, translation
+from django.utils.cache import (
+    get_cache_key, learn_cache_key, patch_cache_control,
+    patch_response_headers, patch_vary_headers,
+)
 from django.utils.encoding import force_text
 from django.views.decorators.cache import cache_page
+
+from .models import Poll, expensive_calculation
 
 try:    # Use the same idiom as in cache backends
     from django.utils.six.moves import cPickle as pickle
 except ImportError:
     import pickle
-
-from .models import Poll, expensive_calculation
 
 
 # functions/classes for complex data type tests
@@ -68,7 +70,7 @@ class Unpickable(object):
         'BACKEND': 'django.core.cache.backends.dummy.DummyCache',
     }
 })
-class DummyCacheTests(TestCase):
+class DummyCacheTests(SimpleTestCase):
     # The Dummy cache backend doesn't really behave like a test backend,
     # so it has its own test case.
 
@@ -883,6 +885,28 @@ class BaseCacheTests(object):
         with self.assertRaises(pickle.PickleError):
             cache.set('unpickable', Unpickable())
 
+    def test_get_or_set(self):
+        self.assertIsNone(cache.get('projector'))
+        self.assertEqual(cache.get_or_set('projector', 42), 42)
+        self.assertEqual(cache.get('projector'), 42)
+
+    def test_get_or_set_callable(self):
+        def my_callable():
+            return 'value'
+
+        self.assertEqual(cache.get_or_set('mykey', my_callable), 'value')
+
+    def test_get_or_set_version(self):
+        cache.get_or_set('brian', 1979, version=2)
+        with self.assertRaisesMessage(ValueError, 'You need to specify a value.'):
+            cache.get_or_set('brian')
+        with self.assertRaisesMessage(ValueError, 'You need to specify a value.'):
+            cache.get_or_set('brian', version=1)
+        self.assertIsNone(cache.get('brian', version=1))
+        self.assertEqual(cache.get_or_set('brian', 42, version=1), 42)
+        self.assertEqual(cache.get_or_set('brian', 1979, version=2), 1979)
+        self.assertIsNone(cache.get('brian', version=3))
+
 
 @override_settings(CACHES=caches_setting_for_tests(
     BACKEND='django.core.cache.backends.db.DatabaseCache',
@@ -920,6 +944,17 @@ class DBCacheTests(BaseCacheTests, TransactionTestCase):
         self.assertEqual(out.getvalue(),
             "Cache table 'test cache table' already exists.\n" * len(settings.CACHES))
 
+    @override_settings(CACHES=caches_setting_for_tests(
+        BACKEND='django.core.cache.backends.db.DatabaseCache',
+        # Use another table name to avoid the 'table already exists' message.
+        LOCATION='createcachetable_dry_run_mode'
+    ))
+    def test_createcachetable_dry_run_mode(self):
+        out = six.StringIO()
+        management.call_command('createcachetable', dry_run=True, stdout=out)
+        output = out.getvalue()
+        self.assertTrue(output.startswith("CREATE TABLE"))
+
     def test_createcachetable_with_table_argument(self):
         """
         Delete and recreate cache table with legacy behavior (explicitly
@@ -955,14 +990,17 @@ class DBCacheRouter(object):
     def db_for_read(self, model, **hints):
         if model._meta.app_label == 'django_cache':
             return 'other'
+        return None
 
     def db_for_write(self, model, **hints):
         if model._meta.app_label == 'django_cache':
             return 'other'
+        return None
 
-    def allow_migrate(self, db, model):
-        if model._meta.app_label == 'django_cache':
+    def allow_migrate(self, db, app_label, **hints):
+        if app_label == 'django_cache':
             return db == 'other'
+        return None
 
 
 @override_settings(
@@ -1198,7 +1236,7 @@ class FileBasedCacheTests(BaseCacheTests, TestCase):
         'BACKEND': 'cache.liberal_backend.CacheClass',
     },
 })
-class CustomCacheKeyValidationTests(TestCase):
+class CustomCacheKeyValidationTests(SimpleTestCase):
     """
     Tests for the ability to mixin a custom ``validate_key`` method to
     a custom cache backend that otherwise inherits from a builtin
@@ -1220,37 +1258,12 @@ class CustomCacheKeyValidationTests(TestCase):
         }
     }
 )
-class GetCacheTests(IgnoreDeprecationWarningsMixin, TestCase):
-
-    def test_simple(self):
-        self.assertIsInstance(
-            caches[DEFAULT_CACHE_ALIAS],
-            get_cache('default').__class__
-        )
-
-        cache = get_cache(
-            'django.core.cache.backends.dummy.DummyCache',
-            **{'TIMEOUT': 120}
-        )
-        self.assertEqual(cache.default_timeout, 120)
-
-        self.assertRaises(InvalidCacheBackendError, get_cache, 'does_not_exist')
+class CacheClosingTests(SimpleTestCase):
 
     def test_close(self):
         self.assertFalse(cache.closed)
         signals.request_finished.send(self.__class__)
         self.assertTrue(cache.closed)
-
-    def test_close_deprecated(self):
-        cache = get_cache('cache.closeable_cache.CacheClass')
-        self.assertFalse(cache.closed)
-        # Ensure that we don't close the global cache instances.
-        signals.request_finished.disconnect(close_caches)
-        try:
-            signals.request_finished.send(self.__class__)
-            self.assertTrue(cache.closed)
-        finally:
-            signals.request_finished.connect(close_caches)
 
 
 DEFAULT_MEMORY_CACHES_SETTINGS = {
@@ -1263,7 +1276,7 @@ NEVER_EXPIRING_CACHES_SETTINGS = copy.deepcopy(DEFAULT_MEMORY_CACHES_SETTINGS)
 NEVER_EXPIRING_CACHES_SETTINGS['default']['TIMEOUT'] = None
 
 
-class DefaultNonExpiringCacheKeyTests(TestCase):
+class DefaultNonExpiringCacheKeyTests(SimpleTestCase):
     """Tests that verify that settings having Cache arguments with a TIMEOUT
     set to `None` will create Caches that will set non-expiring keys.
 
@@ -1339,13 +1352,16 @@ class DefaultNonExpiringCacheKeyTests(TestCase):
     },
     USE_I18N=False,
 )
-class CacheUtils(TestCase):
+class CacheUtils(SimpleTestCase):
     """TestCase for django.utils.cache functions."""
 
     def setUp(self):
         self.host = 'www.example.com'
         self.path = '/cache/test/'
         self.factory = RequestFactory(HTTP_HOST=self.host)
+
+    def tearDown(self):
+        cache.clear()
 
     def _get_request_cache(self, method='GET', query_string=None, update_cache=None):
         request = self._get_request(self.host, self.path,
@@ -1382,7 +1398,7 @@ class CacheUtils(TestCase):
         request = self.factory.get(self.path)
         response = HttpResponse()
         # Expect None if no headers have been set yet.
-        self.assertIsNone(get_cache_key(request, response))
+        self.assertIsNone(get_cache_key(request))
         # Set headers to an empty list.
         learn_cache_key(request, response)
 
@@ -1485,7 +1501,7 @@ class PrefixedCacheUtils(CacheUtils):
         },
     },
 )
-class CacheHEADTest(TestCase):
+class CacheHEADTest(SimpleTestCase):
 
     def setUp(self):
         self.path = '/cache/test/'
@@ -1532,10 +1548,10 @@ class CacheHEADTest(TestCase):
             'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
         },
     },
-    LANGUAGES=(
+    LANGUAGES=[
         ('en', 'English'),
         ('es', 'Spanish'),
-    ),
+    ],
 )
 class CacheI18nTest(TestCase):
 
@@ -1805,7 +1821,7 @@ def csrf_view(request):
         },
     },
 )
-class CacheMiddlewareTest(TestCase):
+class CacheMiddlewareTest(SimpleTestCase):
 
     def setUp(self):
         super(CacheMiddlewareTest, self).setUp()
@@ -1986,7 +2002,7 @@ class CacheMiddlewareTest(TestCase):
     },
     USE_I18N=False,
 )
-class TestWithTemplateResponse(TestCase):
+class TestWithTemplateResponse(SimpleTestCase):
     """
     Tests various headers w/ TemplateResponse.
 
@@ -2016,7 +2032,8 @@ class TestWithTemplateResponse(TestCase):
             ('Cookie    ,     Accept-Encoding', ('Accept-Encoding', 'cookie'), 'Cookie, Accept-Encoding'),
         )
         for initial_vary, newheaders, resulting_vary in headers:
-            response = TemplateResponse(HttpResponse(), Template("This is a test"))
+            template = engines['django'].from_string("This is a test")
+            response = TemplateResponse(HttpRequest(), template)
             if initial_vary is not None:
                 response['Vary'] = initial_vary
             patch_vary_headers(response, newheaders)
@@ -2024,7 +2041,8 @@ class TestWithTemplateResponse(TestCase):
 
     def test_get_cache_key(self):
         request = self.factory.get(self.path)
-        response = TemplateResponse(HttpResponse(), Template("This is a test"))
+        template = engines['django'].from_string("This is a test")
+        response = TemplateResponse(HttpRequest(), template)
         key_prefix = 'localprefix'
         # Expect None if no headers have been set yet.
         self.assertIsNone(get_cache_key(request))
@@ -2046,7 +2064,8 @@ class TestWithTemplateResponse(TestCase):
 
     def test_get_cache_key_with_query(self):
         request = self.factory.get(self.path, {'test': 1})
-        response = TemplateResponse(HttpResponse(), Template("This is a test"))
+        template = engines['django'].from_string("This is a test")
+        response = TemplateResponse(HttpRequest(), template)
         # Expect None if no headers have been set yet.
         self.assertIsNone(get_cache_key(request))
         # Set headers to an empty list.
@@ -2060,7 +2079,8 @@ class TestWithTemplateResponse(TestCase):
 
     @override_settings(USE_ETAGS=False)
     def test_without_etag(self):
-        response = TemplateResponse(HttpResponse(), Template("This is a test"))
+        template = engines['django'].from_string("This is a test")
+        response = TemplateResponse(HttpRequest(), template)
         self.assertFalse(response.has_header('ETag'))
         patch_response_headers(response)
         self.assertFalse(response.has_header('ETag'))
@@ -2069,7 +2089,8 @@ class TestWithTemplateResponse(TestCase):
 
     @override_settings(USE_ETAGS=True)
     def test_with_etag(self):
-        response = TemplateResponse(HttpResponse(), Template("This is a test"))
+        template = engines['django'].from_string("This is a test")
+        response = TemplateResponse(HttpRequest(), template)
         self.assertFalse(response.has_header('ETag'))
         patch_response_headers(response)
         self.assertFalse(response.has_header('ETag'))
@@ -2077,7 +2098,7 @@ class TestWithTemplateResponse(TestCase):
         self.assertTrue(response.has_header('ETag'))
 
 
-class TestMakeTemplateFragmentKey(TestCase):
+class TestMakeTemplateFragmentKey(SimpleTestCase):
     def test_without_vary_on(self):
         key = make_template_fragment_key('a.fragment')
         self.assertEqual(key, 'template.cache.a.fragment.d41d8cd98f00b204e9800998ecf8427e')
@@ -2098,7 +2119,7 @@ class TestMakeTemplateFragmentKey(TestCase):
             'template.cache.spam.f27688177baec990cdf3fbd9d9c3f469')
 
 
-class CacheHandlerTest(TestCase):
+class CacheHandlerTest(SimpleTestCase):
     def test_same_instance(self):
         """
         Attempting to retrieve the same alias should yield the same instance.

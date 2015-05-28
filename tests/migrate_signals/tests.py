@@ -1,9 +1,8 @@
 from django.apps import apps
 from django.core import management
 from django.db.models import signals
-from django.test import override_settings, TestCase
+from django.test import TestCase, override_settings
 from django.utils import six
-
 
 APP_CONFIG = apps.get_app_config('migrate_signals')
 PRE_MIGRATE_ARGS = ['app_config', 'verbosity', 'interactive', 'using']
@@ -66,7 +65,7 @@ class MigrateSignalTests(TestCase):
         signals.pre_migrate.connect(r, sender=APP_CONFIG)
         management.call_command('migrate', database=MIGRATE_DATABASE,
             verbosity=MIGRATE_VERBOSITY, interactive=MIGRATE_INTERACTIVE,
-            load_initial_data=False, stdout=six.StringIO())
+            stdout=six.StringIO())
 
         args = r.call_args
         self.assertEqual(r.call_counter, 1)
@@ -86,7 +85,7 @@ class MigrateSignalTests(TestCase):
         stdout = six.StringIO()
         management.call_command('migrate', database=MIGRATE_DATABASE,
             verbosity=MIGRATE_VERBOSITY, interactive=MIGRATE_INTERACTIVE,
-            load_initial_data=False, stdout=stdout)
+            stdout=stdout)
         args = r.call_args
         self.assertEqual(r.call_counter, 1)
         self.assertEqual(set(args), set(PRE_MIGRATE_ARGS))

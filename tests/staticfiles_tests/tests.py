@@ -6,87 +6,58 @@ import os
 import posixpath
 import shutil
 import sys
+import tempfile
 import unittest
 
-from django.template import Context, Template
 from django.conf import settings
+from django.contrib.staticfiles import finders, storage
+from django.contrib.staticfiles.management.commands import collectstatic
+from django.contrib.staticfiles.management.commands.collectstatic import \
+    Command as CollectstaticCommand
 from django.core.cache.backends.base import BaseCache
 from django.core.exceptions import ImproperlyConfigured
 from django.core.management import call_command
-from django.test import TestCase, override_settings
+from django.template import Context, Template
+from django.test import SimpleTestCase, override_settings
+from django.utils import six
+from django.utils._os import symlinks_supported, upath
 from django.utils.encoding import force_text
 from django.utils.functional import empty
-from django.utils._os import rmtree_errorhandler, upath, symlinks_supported
-from django.utils import six
-
-from django.contrib.staticfiles import finders, storage
-from django.contrib.staticfiles.management.commands import collectstatic
 
 from .storage import DummyStorage
 
-
 TEST_ROOT = os.path.dirname(upath(__file__))
+
+TESTFILES_PATH = os.path.join(TEST_ROOT, 'apps', 'test', 'static', 'test')
+
 TEST_SETTINGS = {
     'DEBUG': True,
     'MEDIA_URL': '/media/',
     'STATIC_URL': '/static/',
     'MEDIA_ROOT': os.path.join(TEST_ROOT, 'project', 'site_media', 'media'),
     'STATIC_ROOT': os.path.join(TEST_ROOT, 'project', 'site_media', 'static'),
-    'STATICFILES_DIRS': (
+    'STATICFILES_DIRS': [
         os.path.join(TEST_ROOT, 'project', 'documents'),
         ('prefix', os.path.join(TEST_ROOT, 'project', 'prefixed')),
-    ),
-    'STATICFILES_FINDERS': (
+    ],
+    'STATICFILES_FINDERS': [
         'django.contrib.staticfiles.finders.FileSystemFinder',
         'django.contrib.staticfiles.finders.AppDirectoriesFinder',
         'django.contrib.staticfiles.finders.DefaultStorageFinder',
-    ),
-    'INSTALLED_APPS': (
-        'django.contrib.contenttypes',
-        'django.contrib.auth',
-        'django.contrib.admin.apps.SimpleAdminConfig',
+    ],
+    'INSTALLED_APPS': [
         'django.contrib.staticfiles',
         'staticfiles_tests',
         'staticfiles_tests.apps.test',
         'staticfiles_tests.apps.no_label',
-    ),
+    ],
 }
-from django.contrib.staticfiles.management.commands.collectstatic import Command as CollectstaticCommand
 
 
 class BaseStaticFilesTestCase(object):
     """
     Test case with a couple utility assertions.
     """
-    def setUp(self):
-        # Clear the cached staticfiles_storage out, this is because when it first
-        # gets accessed (by some other test), it evaluates settings.STATIC_ROOT,
-        # since we're planning on changing that we need to clear out the cache.
-        storage.staticfiles_storage._wrapped = empty
-        # Clear the cached staticfile finders, so they are reinitialized every
-        # run and pick up changes in settings.STATICFILES_DIRS.
-        finders.get_finder.cache_clear()
-
-        self.testfiles_path = os.path.join(TEST_ROOT, 'apps', 'test', 'static', 'test')
-        # To make sure SVN doesn't hangs itself with the non-ASCII characters
-        # during checkout, we actually create one file dynamically.
-        self._nonascii_filepath = os.path.join(self.testfiles_path, '\u2297.txt')
-        with codecs.open(self._nonascii_filepath, 'w', 'utf-8') as f:
-            f.write("\u2297 in the app dir")
-        # And also create the magic hidden file to trick the setup.py's
-        # package data handling.
-        self._hidden_filepath = os.path.join(self.testfiles_path, '.hidden')
-        with codecs.open(self._hidden_filepath, 'w', 'utf-8') as f:
-            f.write("should be ignored")
-        self._backup_filepath = os.path.join(
-            TEST_ROOT, 'project', 'documents', 'test', 'backup~')
-        with codecs.open(self._backup_filepath, 'w', 'utf-8') as f:
-            f.write("should be ignored")
-
-    def tearDown(self):
-        os.unlink(self._nonascii_filepath)
-        os.unlink(self._hidden_filepath)
-        os.unlink(self._backup_filepath)
 
     def assertFileContains(self, filepath, text):
         self.assertIn(text, self._get_file(force_text(filepath)),
@@ -114,7 +85,7 @@ class BaseStaticFilesTestCase(object):
 
 
 @override_settings(**TEST_SETTINGS)
-class StaticFilesTestCase(BaseStaticFilesTestCase, TestCase):
+class StaticFilesTestCase(BaseStaticFilesTestCase, SimpleTestCase):
     pass
 
 
@@ -129,12 +100,18 @@ class BaseCollectionTestCase(BaseStaticFilesTestCase):
     """
     def setUp(self):
         super(BaseCollectionTestCase, self).setUp()
-        if not os.path.exists(settings.STATIC_ROOT):
-            os.mkdir(settings.STATIC_ROOT)
+        temp_dir = tempfile.mkdtemp()
+        # Override the STATIC_ROOT for all tests from setUp to tearDown
+        # rather than as a context manager
+        self.patched_settings = self.settings(STATIC_ROOT=temp_dir)
+        self.patched_settings.enable()
         self.run_collectstatic()
-        # Use our own error handler that can handle .svn dirs on Windows
-        self.addCleanup(shutil.rmtree, settings.STATIC_ROOT,
-                        ignore_errors=True, onerror=rmtree_errorhandler)
+        # Same comment as in runtests.teardown.
+        self.addCleanup(shutil.rmtree, six.text_type(temp_dir))
+
+    def tearDown(self):
+        self.patched_settings.disable()
+        super(BaseCollectionTestCase, self).tearDown()
 
     def run_collectstatic(self, **kwargs):
         call_command('collectstatic', interactive=False, verbosity=0,
@@ -242,13 +219,11 @@ class TestFindStatic(CollectionTestCase, TestDefaults):
         self.assertIn('project', force_text(lines[1]))
         self.assertIn('apps', force_text(lines[2]))
         self.assertIn("Looking in the following locations:", force_text(lines[3]))
-        searched_locations = ', '.join(lines[4:])
+        searched_locations = ', '.join(force_text(x) for x in lines[4:])
         # AppDirectoriesFinder searched locations
         self.assertIn(os.path.join('staticfiles_tests', 'apps', 'test', 'static'),
                       searched_locations)
         self.assertIn(os.path.join('staticfiles_tests', 'apps', 'no_label', 'static'),
-                      searched_locations)
-        self.assertIn(os.path.join('django', 'contrib', 'admin', 'static'),
                       searched_locations)
         # FileSystemFinder searched locations
         self.assertIn(TEST_SETTINGS['STATICFILES_DIRS'][1][1], searched_locations)
@@ -325,6 +300,10 @@ class TestCollectionClear(CollectionTestCase):
 
     def test_cleared_not_found(self):
         self.assertFileNotFound('cleared.txt')
+
+    def test_dir_not_exists(self, **kwargs):
+        shutil.rmtree(six.text_type(settings.STATIC_ROOT))
+        super(TestCollectionClear, self).run_collectstatic(clear=True)
 
 
 class TestCollectionExcludeNoDefaultIgnore(CollectionTestCase, TestDefaults):
@@ -595,8 +574,8 @@ class TestHashedFiles(object):
             self.assertIn(b"other.d41d8cd98f00.css", content)
 
     @override_settings(
-        STATICFILES_DIRS=(os.path.join(TEST_ROOT, 'project', 'faulty'),),
-        STATICFILES_FINDERS=('django.contrib.staticfiles.finders.FileSystemFinder',),
+        STATICFILES_DIRS=[os.path.join(TEST_ROOT, 'project', 'faulty')],
+        STATICFILES_FINDERS=['django.contrib.staticfiles.finders.FileSystemFinder'],
     )
     def test_post_processing_failure(self):
         """
@@ -617,7 +596,7 @@ class TestHashedFiles(object):
     DEBUG=False,
 ))
 class TestCollectionCachedStorage(TestHashedFiles, BaseCollectionTestCase,
-        BaseStaticFilesTestCase, TestCase):
+        BaseStaticFilesTestCase, SimpleTestCase):
     """
     Tests for the Cache busting storage
     """
@@ -654,7 +633,7 @@ class TestCollectionCachedStorage(TestHashedFiles, BaseCollectionTestCase,
     DEBUG=False,
 ))
 class TestCollectionManifestStorage(TestHashedFiles, BaseCollectionTestCase,
-        BaseStaticFilesTestCase, TestCase):
+        BaseStaticFilesTestCase, SimpleTestCase):
     """
     Tests for the Cache busting storage
     """
@@ -662,7 +641,7 @@ class TestCollectionManifestStorage(TestHashedFiles, BaseCollectionTestCase,
     def setUp(self):
         super(TestCollectionManifestStorage, self).setUp()
 
-        self._clear_filename = os.path.join(self.testfiles_path, 'cleared.txt')
+        self._clear_filename = os.path.join(TESTFILES_PATH, 'cleared.txt')
         with open(self._clear_filename, 'w') as f:
             f.write('to be deleted in one test')
 
@@ -722,7 +701,7 @@ class TestCollectionManifestStorage(TestHashedFiles, BaseCollectionTestCase,
     DEBUG=False,
 ))
 class TestCollectionSimpleCachedStorage(BaseCollectionTestCase,
-        BaseStaticFilesTestCase, TestCase):
+        BaseStaticFilesTestCase, SimpleTestCase):
     """
     Tests for the Cache busting storage
     """
@@ -822,18 +801,6 @@ class TestServeStaticWithURLHelper(TestServeStatic, TestDefaults):
     """
 
 
-class TestServeAdminMedia(TestServeStatic):
-    """
-    Test serving media from django.contrib.admin.
-    """
-    def _response(self, filepath):
-        return self.client.get(
-            posixpath.join(settings.STATIC_URL, 'admin/', filepath))
-
-    def test_serve_admin_media(self):
-        self.assertFileContains('css/base.css', 'body')
-
-
 class FinderTestCase(object):
     """
     Base finder test mixin.
@@ -893,10 +860,10 @@ class TestDefaultStorageFinder(StaticFilesTestCase, FinderTestCase):
 
 
 @override_settings(
-    STATICFILES_FINDERS=('django.contrib.staticfiles.finders.FileSystemFinder',),
+    STATICFILES_FINDERS=['django.contrib.staticfiles.finders.FileSystemFinder'],
     STATICFILES_DIRS=[os.path.join(TEST_ROOT, 'project', 'documents')],
 )
-class TestMiscFinder(TestCase):
+class TestMiscFinder(SimpleTestCase):
     """
     A few misc finder tests.
     """

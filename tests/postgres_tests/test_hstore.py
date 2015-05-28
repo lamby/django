@@ -1,18 +1,20 @@
 import json
-import unittest
 
-from django.contrib.postgres import forms
-from django.contrib.postgres.fields import HStoreField
-from django.contrib.postgres.validators import KeysValidator
 from django.core import exceptions, serializers
-from django.db import connection
-from django.test import TestCase
+from django.forms import Form
 
+from . import PostgresSQLTestCase
 from .models import HStoreModel
 
+try:
+    from django.contrib.postgres import forms
+    from django.contrib.postgres.fields import HStoreField
+    from django.contrib.postgres.validators import KeysValidator
+except ImportError:
+    pass
 
-@unittest.skipUnless(connection.vendor == 'postgresql', 'PostgreSQL required')
-class SimpleTests(TestCase):
+
+class SimpleTests(PostgresSQLTestCase):
     apps = ['django.contrib.postgres']
 
     def test_save_load_success(self):
@@ -36,8 +38,7 @@ class SimpleTests(TestCase):
         self.assertEqual(reloaded.field, value)
 
 
-@unittest.skipUnless(connection.vendor == 'postgresql', 'PostgreSQL required')
-class TestQuerying(TestCase):
+class TestQuerying(PostgresSQLTestCase):
 
     def setUp(self):
         self.objs = [
@@ -114,9 +115,19 @@ class TestQuerying(TestCase):
             self.objs[:3]
         )
 
+    def test_key_isnull(self):
+        obj = HStoreModel.objects.create(field={'a': None})
+        self.assertSequenceEqual(
+            HStoreModel.objects.filter(field__a__isnull=True),
+            self.objs[2:5] + [obj]
+        )
+        self.assertSequenceEqual(
+            HStoreModel.objects.filter(field__a__isnull=False),
+            self.objs[:2]
+        )
 
-@unittest.skipUnless(connection.vendor == 'postgresql', 'PostgreSQL required')
-class TestSerialization(TestCase):
+
+class TestSerialization(PostgresSQLTestCase):
     test_data = '[{"fields": {"field": "{\\"a\\": \\"b\\"}"}, "model": "postgres_tests.hstoremodel", "pk": null}]'
 
     def test_dumping(self):
@@ -129,7 +140,7 @@ class TestSerialization(TestCase):
         self.assertEqual(instance.field, {'a': 'b'})
 
 
-class TestValidation(TestCase):
+class TestValidation(PostgresSQLTestCase):
 
     def test_not_a_string(self):
         field = HStoreField()
@@ -139,7 +150,7 @@ class TestValidation(TestCase):
         self.assertEqual(cm.exception.message % cm.exception.params, 'The value of "a" is not a string.')
 
 
-class TestFormField(TestCase):
+class TestFormField(PostgresSQLTestCase):
 
     def test_valid(self):
         field = forms.HStoreField()
@@ -168,8 +179,14 @@ class TestFormField(TestCase):
         form_field = model_field.formfield()
         self.assertIsInstance(form_field, forms.HStoreField)
 
+    def test_empty_field_has_not_changed(self):
+        class HStoreFormTest(Form):
+            f1 = HStoreField()
+        form_w_hstore = HStoreFormTest()
+        self.assertFalse(form_w_hstore.has_changed())
 
-class TestValidator(TestCase):
+
+class TestValidator(PostgresSQLTestCase):
 
     def test_simple_valid(self):
         validator = KeysValidator(keys=['a', 'b'])

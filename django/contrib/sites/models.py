@@ -1,18 +1,12 @@
 from __future__ import unicode_literals
 
 import string
-import warnings
 
 from django.core.exceptions import ImproperlyConfigured, ValidationError
 from django.db import models
-from django.db.models.signals import pre_save, pre_delete
-from django.utils.deprecation import RemovedInDjango19Warning
+from django.db.models.signals import pre_delete, pre_save
 from django.utils.encoding import python_2_unicode_compatible
 from django.utils.translation import ugettext_lazy as _
-
-from .requests import RequestSite as RealRequestSite
-from .shortcuts import get_current_site as real_get_current_site
-
 
 SITE_CACHE = {}
 
@@ -79,7 +73,7 @@ class SiteManager(models.Manager):
 class Site(models.Model):
 
     domain = models.CharField(_('domain name'), max_length=100,
-        validators=[_simple_domain_name_validator])
+        validators=[_simple_domain_name_validator], unique=True)
     name = models.CharField(_('display name'), max_length=50)
     objects = SiteManager()
 
@@ -93,32 +87,18 @@ class Site(models.Model):
         return self.domain
 
 
-class RequestSite(RealRequestSite):
-    def __init__(self, *args, **kwargs):
-        warnings.warn(
-            "Please import RequestSite from django.contrib.sites.requests.",
-            RemovedInDjango19Warning, stacklevel=2)
-        super(RequestSite, self).__init__(*args, **kwargs)
-
-
-def get_current_site(request):
-    warnings.warn(
-        "Please import get_current_site from django.contrib.sites.shortcuts.",
-        RemovedInDjango19Warning, stacklevel=2)
-    return real_get_current_site(request)
-
-
 def clear_site_cache(sender, **kwargs):
     """
     Clears the cache (if primed) each time a site is saved or deleted
     """
     instance = kwargs['instance']
+    using = kwargs['using']
     try:
         del SITE_CACHE[instance.pk]
     except KeyError:
         pass
     try:
-        del SITE_CACHE[Site.objects.get(pk=instance.pk).domain]
+        del SITE_CACHE[Site.objects.using(using).get(pk=instance.pk).domain]
     except (KeyError, Site.DoesNotExist):
         pass
 pre_save.connect(clear_site_cache, sender=Site)

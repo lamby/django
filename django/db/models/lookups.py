@@ -1,8 +1,6 @@
-from copy import copy
 import inspect
+from copy import copy
 
-from django.conf import settings
-from django.utils import timezone
 from django.utils.functional import cached_property
 from django.utils.six.moves import range
 
@@ -86,6 +84,10 @@ class Transform(RegisterLookupMixin):
         if self.bilateral:
             bilateral_transforms.append((self.__class__, self.init_lookups))
         return bilateral_transforms
+
+    @cached_property
+    def contains_aggregate(self):
+        return self.lhs.contains_aggregate
 
 
 class Lookup(RegisterLookupMixin):
@@ -189,6 +191,10 @@ class Lookup(RegisterLookupMixin):
     def as_sql(self, compiler, connection):
         raise NotImplementedError
 
+    @cached_property
+    def contains_aggregate(self):
+        return self.lhs.contains_aggregate or getattr(self.rhs, 'contains_aggregate', False)
+
 
 class BuiltinLookup(Lookup):
     def process_lhs(self, compiler, connection, lhs=None):
@@ -198,7 +204,7 @@ class BuiltinLookup(Lookup):
         db_type = self.lhs.output_field.db_type(connection=connection)
         lhs_sql = connection.ops.field_cast_sql(
             db_type, field_internal_type) % lhs_sql
-        lhs_sql = connection.ops.lookup_cast(self.lookup_name) % lhs_sql
+        lhs_sql = connection.ops.lookup_cast(self.lookup_name, field_internal_type) % lhs_sql
         return lhs_sql, params
 
     def as_sql(self, compiler, connection):
@@ -222,6 +228,14 @@ default_lookups['exact'] = Exact
 
 class IExact(BuiltinLookup):
     lookup_name = 'iexact'
+
+    def process_rhs(self, qn, connection):
+        rhs, params = super(IExact, self).process_rhs(qn, connection)
+        if params:
+            params[0] = connection.ops.prep_for_iexact_query(params[0])
+        return rhs, params
+
+
 default_lookups['iexact'] = IExact
 
 
@@ -317,42 +331,79 @@ class PatternLookup(BuiltinLookup):
 
 class Contains(PatternLookup):
     lookup_name = 'contains'
+
+    def process_rhs(self, qn, connection):
+        rhs, params = super(Contains, self).process_rhs(qn, connection)
+        if params and not self.bilateral_transforms:
+            params[0] = "%%%s%%" % connection.ops.prep_for_like_query(params[0])
+        return rhs, params
+
+
 default_lookups['contains'] = Contains
 
 
-class IContains(PatternLookup):
+class IContains(Contains):
     lookup_name = 'icontains'
+
+
 default_lookups['icontains'] = IContains
 
 
 class StartsWith(PatternLookup):
     lookup_name = 'startswith'
+
+    def process_rhs(self, qn, connection):
+        rhs, params = super(StartsWith, self).process_rhs(qn, connection)
+        if params and not self.bilateral_transforms:
+            params[0] = "%s%%" % connection.ops.prep_for_like_query(params[0])
+        return rhs, params
+
+
 default_lookups['startswith'] = StartsWith
 
 
 class IStartsWith(PatternLookup):
     lookup_name = 'istartswith'
+
+    def process_rhs(self, qn, connection):
+        rhs, params = super(IStartsWith, self).process_rhs(qn, connection)
+        if params and not self.bilateral_transforms:
+            params[0] = "%s%%" % connection.ops.prep_for_like_query(params[0])
+        return rhs, params
+
+
 default_lookups['istartswith'] = IStartsWith
 
 
 class EndsWith(PatternLookup):
     lookup_name = 'endswith'
+
+    def process_rhs(self, qn, connection):
+        rhs, params = super(EndsWith, self).process_rhs(qn, connection)
+        if params and not self.bilateral_transforms:
+            params[0] = "%%%s" % connection.ops.prep_for_like_query(params[0])
+        return rhs, params
+
+
 default_lookups['endswith'] = EndsWith
 
 
 class IEndsWith(PatternLookup):
     lookup_name = 'iendswith'
+
+    def process_rhs(self, qn, connection):
+        rhs, params = super(IEndsWith, self).process_rhs(qn, connection)
+        if params and not self.bilateral_transforms:
+            params[0] = "%%%s" % connection.ops.prep_for_like_query(params[0])
+        return rhs, params
+
+
 default_lookups['iendswith'] = IEndsWith
 
 
 class Between(BuiltinLookup):
     def get_rhs_op(self, connection, rhs):
         return "BETWEEN %s AND %s" % (rhs, rhs)
-
-
-class Year(Between):
-    lookup_name = 'year'
-default_lookups['year'] = Year
 
 
 class Range(BuiltinLookup):
@@ -370,57 +421,6 @@ class Range(BuiltinLookup):
             return super(Range, self).process_rhs(compiler, connection)
 
 default_lookups['range'] = Range
-
-
-class DateLookup(BuiltinLookup):
-    def process_lhs(self, compiler, connection, lhs=None):
-        from django.db.models import DateTimeField
-        lhs, params = super(DateLookup, self).process_lhs(compiler, connection, lhs)
-        if isinstance(self.lhs.output_field, DateTimeField):
-            tzname = timezone.get_current_timezone_name() if settings.USE_TZ else None
-            sql, tz_params = connection.ops.datetime_extract_sql(self.extract_type, lhs, tzname)
-            return connection.ops.lookup_cast(self.lookup_name) % sql, tz_params
-        else:
-            return connection.ops.date_extract_sql(self.lookup_name, lhs), []
-
-    def get_rhs_op(self, connection, rhs):
-        return '= %s' % rhs
-
-
-class Month(DateLookup):
-    lookup_name = 'month'
-    extract_type = 'month'
-default_lookups['month'] = Month
-
-
-class Day(DateLookup):
-    lookup_name = 'day'
-    extract_type = 'day'
-default_lookups['day'] = Day
-
-
-class WeekDay(DateLookup):
-    lookup_name = 'week_day'
-    extract_type = 'week_day'
-default_lookups['week_day'] = WeekDay
-
-
-class Hour(DateLookup):
-    lookup_name = 'hour'
-    extract_type = 'hour'
-default_lookups['hour'] = Hour
-
-
-class Minute(DateLookup):
-    lookup_name = 'minute'
-    extract_type = 'minute'
-default_lookups['minute'] = Minute
-
-
-class Second(DateLookup):
-    lookup_name = 'second'
-    extract_type = 'second'
-default_lookups['second'] = Second
 
 
 class IsNull(BuiltinLookup):

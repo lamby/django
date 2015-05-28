@@ -5,7 +5,7 @@ The django.template namespace contains two independent subsystems:
 
 1. Multiple Template Engines: support for pluggable template backends,
    built-in backends and backend-independent APIs
-2. Django Template Langage: Django's own template engine, including its
+2. Django Template Language: Django's own template engine, including its
    built-in loaders, context processors, tags and filters.
 
 Ideally these subsystems would be implemented in distinct packages. However
@@ -39,32 +39,34 @@ Shared:
 
 """
 
-### Multiple Template Engines
+# Multiple Template Engines
+
+from .engine import Engine
 
 from .utils import EngineHandler
 
 
 engines = EngineHandler()
 
-__all__ = ('engines',)
+__all__ = ('Engine', 'engines')
 
 
-### Django Template Language
+# Django Template Language
 
 # Public exceptions
-from .base import (TemplateDoesNotExist, TemplateSyntaxError,           # NOQA
-                   VariableDoesNotExist)
+from .base import VariableDoesNotExist                                  # NOQA
 from .context import ContextPopException                                # NOQA
+from .exceptions import TemplateDoesNotExist, TemplateSyntaxError       # NOQA
 
 # Template parts
-from .base import (Context, Node, NodeList, RequestContext,             # NOQA
-                   StringOrigin, Template, Variable)
+from .base import (Context, Node, NodeList, Origin, RequestContext,     # NOQA
+                   Template, Variable)
 
 # Deprecated in Django 1.8, will be removed in Django 2.0.
 from .base import resolve_variable                                      # NOQA
 
 # Library management
-from .base import Library                                               # NOQA
+from .library import Library                                            # NOQA
 
 
 __all__ += ('Template', 'Context', 'RequestContext')

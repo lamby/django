@@ -1,4 +1,4 @@
-from django.conf.urls import url, include
+from django.conf.urls import include, url
 
 from . import views
 
@@ -50,6 +50,7 @@ urlpatterns = [
 
     url(r'^included/', include('urlpatterns_reverse.included_namespace_urls')),
     url(r'^inc(?P<outer>[0-9]+)/', include('urlpatterns_reverse.included_urls', namespace='inc-ns5')),
+    url(r'^included/([0-9]+)/', include('urlpatterns_reverse.included_namespace_urls')),
 
     url(r'^ns-outer/(?P<outer>[0-9]+)/', include('urlpatterns_reverse.included_namespace_urls', namespace='inc-outer')),
 

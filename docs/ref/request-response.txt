@@ -34,8 +34,6 @@ All attributes should be considered read-only, unless stated otherwise below.
 
 .. attribute:: HttpRequest.scheme
 
-    .. versionadded:: 1.7
-
     A string representing the scheme of the request (``http`` or ``https``
     usually).
 
@@ -51,7 +49,7 @@ All attributes should be considered read-only, unless stated otherwise below.
 .. attribute:: HttpRequest.path
 
     A string representing the full path to the requested page, not including
-    the domain.
+    the scheme or domain.
 
     Example: ``"/music/bands/the_beatles/"``
 
@@ -108,21 +106,6 @@ All attributes should be considered read-only, unless stated otherwise below.
 
     Note: ``POST`` does *not* include file-upload information. See ``FILES``.
 
-.. attribute:: HttpRequest.REQUEST
-
-    .. deprecated:: 1.7
-        Use the more explicit ``GET`` and ``POST`` instead.
-
-    For convenience, a dictionary-like object that searches ``POST`` first,
-    then ``GET``. Inspired by PHP's ``$_REQUEST``.
-
-    For example, if ``GET = {"name": "john"}`` and ``POST = {"age": '34'}``,
-    ``REQUEST["name"]`` would be ``"john"``, and ``REQUEST["age"]`` would be
-    ``"34"``.
-
-    It's strongly suggested that you use ``GET`` and ``POST`` instead of
-    ``REQUEST``, because the former are more explicit.
-
 .. attribute:: HttpRequest.COOKIES
 
     A standard Python dictionary containing all cookies. Keys and values are
@@ -147,8 +130,9 @@ All attributes should be considered read-only, unless stated otherwise below.
     Available headers depend on the client and server, but here are some
     examples:
 
-    * ``CONTENT_LENGTH`` -- the length of the request body (as a string).
-    * ``CONTENT_TYPE`` -- the MIME type of the request body.
+    * ``CONTENT_LENGTH`` -- The length of the request body (as a string).
+    * ``CONTENT_TYPE`` -- The MIME type of the request body.
+    * ``HTTP_ACCEPT`` -- Acceptable content types for the response.
     * ``HTTP_ACCEPT_ENCODING`` -- Acceptable encodings for the response.
     * ``HTTP_ACCEPT_LANGUAGE`` -- Acceptable languages for the response.
     * ``HTTP_HOST`` -- The HTTP Host header sent by the client.
@@ -266,6 +250,14 @@ Methods
 
     Example: ``"http://example.com/music/bands/the_beatles/?print=true"``
 
+    .. note::
+
+        Mixing HTTP and HTTPS on the same site is discouraged, therefore
+        :meth:`~HttpRequest.build_absolute_uri()` will always generate an
+        absolute URI with the same scheme the current request has. If you need
+        to redirect users to HTTPS, it's best to let your webserver redirect
+        all HTTP traffic to HTTPS.
+
 .. method:: HttpRequest.get_signed_cookie(key, default=RAISE_ERROR, salt='', max_age=None)
 
     Returns a cookie value for a signed cookie, or raises a
@@ -330,7 +322,7 @@ Methods
     Methods implementing a file-like interface for reading from an
     HttpRequest instance. This makes it possible to consume an incoming
     request in a streaming fashion. A common use-case would be to process a
-    big XML payload with iterative parser without constructing a whole
+    big XML payload with an iterative parser without constructing a whole
     XML tree in memory.
 
     Given this standard interface, an HttpRequest instance can be
@@ -472,7 +464,7 @@ In addition, ``QueryDict`` has the following methods:
     Returns the data with the requested key, as a Python list. Returns an
     empty list if the key doesn't exist and no default value was provided.
     It's guaranteed to return a list of some sort unless the default value
-    was no list.
+    provided is not a list.
 
 .. method:: QueryDict.setlist(key, list_)
 
@@ -640,9 +632,25 @@ Attributes
 
     The `HTTP status code`_ for the response.
 
+    .. versionchanged:: 1.9
+
+        Unless :attr:`reason_phrase` is explicitly set, modifying the value of
+        ``status_code`` outside the constructor will also modify the value of
+        ``reason_phrase``.
+
 .. attribute:: HttpResponse.reason_phrase
 
     The HTTP reason phrase for the response.
+
+    .. versionchanged:: 1.9
+
+        ``reason_phrase`` no longer defaults to all capital letters. It now
+        uses the `HTTP standard's`_ default reason phrases.
+
+        .. _`HTTP standard's`: https://www.ietf.org/rfc/rfc2616.txt
+
+        Unless explicitly set, ``reason_phrase`` is determined by the current
+        value of :attr:`status_code`.
 
 .. attribute:: HttpResponse.streaming
 
@@ -738,7 +746,7 @@ Methods
       header. It is not part of the :rfc:`2109` standard for cookies,
       and it isn't honored consistently by all browsers. However,
       when it is honored, it can be a useful way to mitigate the
-      risk of client side script accessing the protected cookie
+      risk of a client-side script from accessing the protected cookie
       data.
 
     .. _HTTPOnly: https://www.owasp.org/index.php/HTTPOnly
@@ -817,8 +825,10 @@ types of HTTP responses. Like ``HttpResponse``, these subclasses live in
 
     The first argument to the constructor is required -- the path to redirect
     to. This can be a fully qualified URL
-    (e.g. ``'http://www.yahoo.com/search/'``) or an absolute path with no
-    domain (e.g. ``'/search/'``). See :class:`HttpResponse` for other optional
+    (e.g. ``'http://www.yahoo.com/search/'``), an absolute path with no domain
+    (e.g. ``'/search/'``), or even a relative path (e.g. ``'search/'``). In that
+    last case, the client browser will reconstruct the full URL itself
+    according to the current path. See :class:`HttpResponse` for other optional
     constructor arguments. Note that this returns an HTTP status code 302.
 
     .. attribute:: HttpResponseRedirect.url
@@ -872,8 +882,6 @@ types of HTTP responses. Like ``HttpResponse``, these subclasses live in
 
 JsonResponse objects
 ====================
-
-.. versionadded:: 1.7
 
 .. class:: JsonResponse
 
@@ -991,10 +999,44 @@ Attributes
 
     The `HTTP status code`_ for the response.
 
+    .. versionchanged:: 1.9
+
+        Unless :attr:`reason_phrase` is explicitly set, modifying the value of
+        ``status_code`` outside the constructor will also modify the value of
+        ``reason_phrase``.
+
 .. attribute:: StreamingHttpResponse.reason_phrase
 
     The HTTP reason phrase for the response.
 
+    .. versionchanged:: 1.9
+
+        ``reason_phrase`` no longer defaults to all capital letters. It now
+        uses the `HTTP standard's`_ default reason phrases.
+
+        .. _`HTTP standard's`: https://www.ietf.org/rfc/rfc2616.txt
+
+        Unless explicitly set, ``reason_phrase`` is determined by the current
+        value of :attr:`status_code`.
+
 .. attribute:: StreamingHttpResponse.streaming
 
     This is always ``True``.
+
+FileResponse objects
+====================
+
+.. versionadded:: 1.8
+
+.. class:: FileResponse
+
+:class:`FileResponse` is a subclass of :class:`StreamingHttpResponse` optimized
+for binary files. It uses `wsgi.file_wrapper`_ if provided by the wsgi server,
+otherwise it streams the file out in small chunks.
+
+.. _wsgi.file_wrapper: https://www.python.org/dev/peps/pep-3333/#optional-platform-specific-file-handling
+
+``FileResponse`` expects a file open in binary mode like so::
+
+    >>> from django.http import FileResponse
+    >>> response = FileResponse(open('myfile.png', 'rb'))

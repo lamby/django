@@ -67,6 +67,7 @@ to, or in lieu of custom ``field.clean()`` methods.
 
 ``RegexValidator``
 ------------------
+
 .. class:: RegexValidator([regex=None, message=None, code=None, inverse_match=None, flags=0])
 
     :param regex: If not ``None``, overrides :attr:`regex`. Can be a regular
@@ -102,18 +103,14 @@ to, or in lieu of custom ``field.clean()`` methods.
 
     .. attribute:: inverse_match
 
-        .. versionadded:: 1.7
-
         The match mode for :attr:`regex`. Defaults to ``False``.
 
     .. attribute:: flags
 
-        .. versionadded:: 1.7
-
-        The flags used when compiling the regular expression string :attr:`regex`.
-        If :attr:`regex` is a pre-compiled regular expression, and :attr:`flags` is overridden,
-        :exc:`TypeError` is raised.
-        Defaults to `0`.
+        The flags used when compiling the regular expression string
+        :attr:`regex`. If :attr:`regex` is a pre-compiled regular expression,
+        and :attr:`flags` is overridden, :exc:`TypeError` is raised. Defaults
+        to ``0``.
 
 ``EmailValidator``
 ------------------
@@ -146,12 +143,17 @@ to, or in lieu of custom ``field.clean()`` methods.
 
 ``URLValidator``
 ----------------
+
 .. class:: URLValidator([schemes=None, regex=None, message=None, code=None])
 
     A :class:`RegexValidator` that ensures a value looks like a URL, and raises
-    an error code of ``'invalid'`` if it doesn't. In addition to the optional
-    arguments of its parent :class:`RegexValidator` class, ``URLValidator``
-    accepts an extra optional attribute:
+    an error code of ``'invalid'`` if it doesn't.
+
+    Loopback addresses and reserved IP spaces are considered valid. Literal
+    IPv6 addresses (:rfc:`2732`) and unicode domains are both supported.
+
+    In addition to the optional arguments of its parent :class:`RegexValidator`
+    class, ``URLValidator`` accepts an extra optional attribute:
 
     .. attribute:: schemes
 
@@ -161,18 +163,21 @@ to, or in lieu of custom ``field.clean()`` methods.
 
         .. _valid URI schemes: https://www.iana.org/assignments/uri-schemes/uri-schemes.xhtml
 
-    .. versionchanged:: 1.7
+    .. versionchanged:: 1.8
 
-        The optional ``schemes`` attribute was added.
+        Support for IPv6 addresses, unicode domains, and URLs containing
+        authentication data was added.
 
 ``validate_email``
 ------------------
+
 .. data:: validate_email
 
     An :class:`EmailValidator` instance without any customizations.
 
 ``validate_slug``
 -----------------
+
 .. data:: validate_slug
 
     A :class:`RegexValidator` instance that ensures a value consists of only
@@ -180,6 +185,7 @@ to, or in lieu of custom ``field.clean()`` methods.
 
 ``validate_ipv4_address``
 -------------------------
+
 .. data:: validate_ipv4_address
 
     A :class:`RegexValidator` instance that ensures a value looks like an IPv4
@@ -202,13 +208,25 @@ to, or in lieu of custom ``field.clean()`` methods.
 
 ``validate_comma_separated_integer_list``
 -----------------------------------------
+
 .. data:: validate_comma_separated_integer_list
 
     A :class:`RegexValidator` instance that ensures a value is a
     comma-separated list of integers.
 
+``int_list_validator``
+----------------------
+
+.. function:: int_list_validator(sep=',', message=None, code='invalid')
+
+    .. versionadded:: 1.9
+
+    Returns a :class:`RegexValidator` instance that ensures a string
+    consists of integers separated by ``sep``.
+
 ``MaxValueValidator``
 ---------------------
+
 .. class:: MaxValueValidator(max_value, message=None)
 
     Raises a :exc:`~django.core.exceptions.ValidationError` with a code of
@@ -220,6 +238,7 @@ to, or in lieu of custom ``field.clean()`` methods.
 
 ``MinValueValidator``
 ---------------------
+
 .. class:: MinValueValidator(min_value, message=None)
 
     Raises a :exc:`~django.core.exceptions.ValidationError` with a code of
@@ -231,6 +250,7 @@ to, or in lieu of custom ``field.clean()`` methods.
 
 ``MaxLengthValidator``
 ----------------------
+
 .. class:: MaxLengthValidator(max_length, message=None)
 
     Raises a :exc:`~django.core.exceptions.ValidationError` with a code of
@@ -242,6 +262,7 @@ to, or in lieu of custom ``field.clean()`` methods.
 
 ``MinLengthValidator``
 ----------------------
+
 .. class:: MinLengthValidator(min_length, message=None)
 
     Raises a :exc:`~django.core.exceptions.ValidationError` with a code of

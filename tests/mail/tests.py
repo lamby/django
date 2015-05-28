@@ -2,24 +2,25 @@
 from __future__ import unicode_literals
 
 import asyncore
-from email.mime.text import MIMEText
 import os
 import shutil
 import smtpd
 import sys
 import tempfile
 import threading
-from smtplib import SMTPException, SMTP
+from email.mime.text import MIMEText
+from smtplib import SMTP, SMTPException
 from ssl import SSLError
 
 from django.core import mail
-from django.core.mail import (EmailMessage, mail_admins, mail_managers,
-        EmailMultiAlternatives, send_mail, send_mass_mail)
-from django.core.mail.backends import console, dummy, locmem, filebased, smtp
+from django.core.mail import (
+    EmailMessage, EmailMultiAlternatives, mail_admins, mail_managers,
+    send_mail, send_mass_mail,
+)
+from django.core.mail.backends import console, dummy, filebased, locmem, smtp
 from django.core.mail.message import BadHeaderError
-from django.test import SimpleTestCase
-from django.test import override_settings
-from django.utils.encoding import force_text, force_bytes
+from django.test import SimpleTestCase, override_settings
+from django.utils.encoding import force_bytes, force_text
 from django.utils.six import PY3, StringIO, binary_type
 from django.utils.translation import ugettext_lazy
 
@@ -606,7 +607,7 @@ class BaseEmailBackendTests(HeadersCheckMixin, object):
         message = self.get_the_message()
         self.assertEqual(message.get('subject'), '[Django] Subject')
 
-    @override_settings(ADMINS=(), MANAGERS=())
+    @override_settings(ADMINS=[], MANAGERS=[])
     def test_empty_admins(self):
         """
         Test that mail_admins/mail_managers doesn't connect to the mail server
@@ -663,6 +664,31 @@ class BaseEmailBackendTests(HeadersCheckMixin, object):
         self.assertEqual(message.get('subject'), 'Subject')
         self.assertEqual(message.get('from'), "tester")
         self.assertEqual(message.get('to'), "django")
+
+    def test_lazy_addresses(self):
+        """
+        Email sending should support lazy email addresses (#24416).
+        """
+        _ = ugettext_lazy
+        self.assertTrue(send_mail('Subject', 'Content', _('tester'), [_('django')]))
+        message = self.get_the_message()
+        self.assertEqual(message.get('from'), 'tester')
+        self.assertEqual(message.get('to'), 'django')
+
+        self.flush_mailbox()
+        m = EmailMessage(
+            'Subject', 'Content', _('tester'), [_('to1'), _('to2')],
+            cc=[_('cc1'), _('cc2')],
+            bcc=[_('bcc')],
+            reply_to=[_('reply')],
+        )
+        self.assertEqual(m.recipients(), ['to1', 'to2', 'cc1', 'cc2', 'bcc'])
+        m.send()
+        message = self.get_the_message()
+        self.assertEqual(message.get('from'), 'tester')
+        self.assertEqual(message.get('to'), 'to1, to2')
+        self.assertEqual(message.get('cc'), 'cc1, cc2')
+        self.assertEqual(message.get('Reply-To'), 'reply')
 
     def test_close_connection(self):
         """
@@ -842,6 +868,9 @@ class FakeSMTPServer(smtpd.SMTPServer, threading.Thread):
 
     def __init__(self, *args, **kwargs):
         threading.Thread.__init__(self)
+        # New kwarg added in Python 3.5; default switching to False in 3.6.
+        if sys.version_info >= (3, 5):
+            kwargs['decode_data'] = True
         smtpd.SMTPServer.__init__(self, *args, **kwargs)
         self._sink = []
         self.active = False

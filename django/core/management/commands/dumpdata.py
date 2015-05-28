@@ -1,12 +1,9 @@
-import warnings
-
 from collections import OrderedDict
 
 from django.apps import apps
-from django.core.management.base import BaseCommand, CommandError
 from django.core import serializers
-from django.db import router, DEFAULT_DB_ALIAS
-from django.utils.deprecation import RemovedInDjango19Warning
+from django.core.management.base import BaseCommand, CommandError
+from django.db import DEFAULT_DB_ALIAS, router
 
 
 class Command(BaseCommand):
@@ -28,8 +25,6 @@ class Command(BaseCommand):
         parser.add_argument('-e', '--exclude', dest='exclude', action='append', default=[],
             help='An app_label or app_label.ModelName to exclude '
                  '(use multiple --exclude to exclude multiple apps/models).')
-        parser.add_argument('-n', '--natural', action='store_true', dest='use_natural_keys', default=False,
-            help='Use natural keys if they are available (deprecated: use --natural-foreign instead).')
         parser.add_argument('--natural-foreign', action='store_true', dest='use_natural_foreign_keys', default=False,
             help='Use natural foreign keys if they are available.')
         parser.add_argument('--natural-primary', action='store_true', dest='use_natural_primary_keys', default=False,
@@ -51,11 +46,7 @@ class Command(BaseCommand):
         excludes = options.get('exclude')
         output = options.get('output')
         show_traceback = options.get('traceback')
-        use_natural_keys = options.get('use_natural_keys')
-        if use_natural_keys:
-            warnings.warn("``--natural`` is deprecated; use ``--natural-foreign`` instead.",
-                RemovedInDjango19Warning)
-        use_natural_foreign_keys = options.get('use_natural_foreign_keys') or use_natural_keys
+        use_natural_foreign_keys = options.get('use_natural_foreign_keys')
         use_natural_primary_keys = options.get('use_natural_primary_keys')
         use_base_manager = options.get('use_base_manager')
         pks = options.get('primary_keys')
@@ -77,8 +68,8 @@ class Command(BaseCommand):
             else:
                 try:
                     app_config = apps.get_app_config(exclude)
-                except LookupError:
-                    raise CommandError('Unknown app in excludes: %s' % exclude)
+                except LookupError as e:
+                    raise CommandError(str(e))
                 excluded_apps.add(app_config)
 
         if len(app_labels) == 0:
@@ -96,8 +87,8 @@ class Command(BaseCommand):
                     app_label, model_label = label.split('.')
                     try:
                         app_config = apps.get_app_config(app_label)
-                    except LookupError:
-                        raise CommandError("Unknown application: %s" % app_label)
+                    except LookupError as e:
+                        raise CommandError(str(e))
                     if app_config.models_module is None or app_config in excluded_apps:
                         continue
                     try:
@@ -120,8 +111,8 @@ class Command(BaseCommand):
                     app_label = label
                     try:
                         app_config = apps.get_app_config(app_label)
-                    except LookupError:
-                        raise CommandError("Unknown application: %s" % app_label)
+                    except LookupError as e:
+                        raise CommandError(str(e))
                     if app_config.models_module is None or app_config in excluded_apps:
                         continue
                     app_list[app_config] = None
@@ -141,7 +132,7 @@ class Command(BaseCommand):
             for model in serializers.sort_dependencies(app_list.items()):
                 if model in excluded_models:
                     continue
-                if not model._meta.proxy and router.allow_migrate(using, model):
+                if not model._meta.proxy and router.allow_migrate_model(using, model):
                     if use_base_manager:
                         objects = model._base_manager
                     else:

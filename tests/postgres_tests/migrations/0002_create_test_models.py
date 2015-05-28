@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 from __future__ import unicode_literals
 
-from django.db import models, migrations
-import django.contrib.postgres.fields
-import django.contrib.postgres.fields.hstore
+from django.db import migrations, models
+
+from ..fields import *  # NOQA
 
 
 class Migration(migrations.Migration):
@@ -17,9 +17,10 @@ class Migration(migrations.Migration):
             name='CharArrayModel',
             fields=[
                 ('id', models.AutoField(verbose_name='ID', serialize=False, auto_created=True, primary_key=True)),
-                ('field', django.contrib.postgres.fields.ArrayField(models.CharField(max_length=10), size=None)),
+                ('field', ArrayField(models.CharField(max_length=10), size=None)),
             ],
             options={
+                'required_db_vendor': 'postgresql',
             },
             bases=(models.Model,),
         ),
@@ -27,9 +28,12 @@ class Migration(migrations.Migration):
             name='DateTimeArrayModel',
             fields=[
                 ('id', models.AutoField(verbose_name='ID', serialize=False, auto_created=True, primary_key=True)),
-                ('field', django.contrib.postgres.fields.ArrayField(models.DateTimeField(), size=None)),
+                ('datetimes', ArrayField(models.DateTimeField(), size=None)),
+                ('dates', ArrayField(models.DateField(), size=None)),
+                ('times', ArrayField(models.TimeField(), size=None)),
             ],
             options={
+                'required_db_vendor': 'postgresql',
             },
             bases=(models.Model,),
         ),
@@ -37,9 +41,23 @@ class Migration(migrations.Migration):
             name='HStoreModel',
             fields=[
                 ('id', models.AutoField(verbose_name='ID', serialize=False, auto_created=True, primary_key=True)),
-                ('field', django.contrib.postgres.fields.hstore.HStoreField(blank=True, null=True)),
+                ('field', HStoreField(blank=True, null=True)),
             ],
             options={
+                'required_db_vendor': 'postgresql',
+            },
+            bases=(models.Model,),
+        ),
+        migrations.CreateModel(
+            name='OtherTypesArrayModel',
+            fields=[
+                ('id', models.AutoField(verbose_name='ID', serialize=False, auto_created=True, primary_key=True)),
+                ('ips', ArrayField(models.GenericIPAddressField(), size=None)),
+                ('uuids', ArrayField(models.UUIDField(), size=None)),
+                ('decimals', ArrayField(models.DecimalField(max_digits=5, decimal_places=2), size=None)),
+            ],
+            options={
+                'required_db_vendor': 'postgresql',
             },
             bases=(models.Model,),
         ),
@@ -47,9 +65,10 @@ class Migration(migrations.Migration):
             name='IntegerArrayModel',
             fields=[
                 ('id', models.AutoField(verbose_name='ID', serialize=False, auto_created=True, primary_key=True)),
-                ('field', django.contrib.postgres.fields.ArrayField(models.IntegerField(), size=None)),
+                ('field', ArrayField(models.IntegerField(), size=None)),
             ],
             options={
+                'required_db_vendor': 'postgresql',
             },
             bases=(models.Model,),
         ),
@@ -57,9 +76,10 @@ class Migration(migrations.Migration):
             name='NestedIntegerArrayModel',
             fields=[
                 ('id', models.AutoField(verbose_name='ID', serialize=False, auto_created=True, primary_key=True)),
-                ('field', django.contrib.postgres.fields.ArrayField(django.contrib.postgres.fields.ArrayField(models.IntegerField(), size=None), size=None)),
+                ('field', ArrayField(ArrayField(models.IntegerField(), size=None), size=None)),
             ],
             options={
+                'required_db_vendor': 'postgresql',
             },
             bases=(models.Model,),
         ),
@@ -67,9 +87,10 @@ class Migration(migrations.Migration):
             name='NullableIntegerArrayModel',
             fields=[
                 ('id', models.AutoField(verbose_name='ID', serialize=False, auto_created=True, primary_key=True)),
-                ('field', django.contrib.postgres.fields.ArrayField(models.IntegerField(), size=None, null=True, blank=True)),
+                ('field', ArrayField(models.IntegerField(), size=None, null=True, blank=True)),
             ],
             options={
+                'required_db_vendor': 'postgresql',
             },
             bases=(models.Model,),
         ),
@@ -91,4 +112,50 @@ class Migration(migrations.Migration):
             options=None,
             bases=None,
         ),
+        migrations.CreateModel(
+            name='AggregateTestModel',
+            fields=[
+                ('id', models.AutoField(verbose_name='ID', serialize=False, auto_created=True, primary_key=True)),
+                ('boolean_field', models.NullBooleanField()),
+                ('char_field', models.CharField(max_length=30, blank=True)),
+                ('integer_field', models.IntegerField(null=True)),
+            ]
+        ),
+        migrations.CreateModel(
+            name='StatTestModel',
+            fields=[
+                ('id', models.AutoField(verbose_name='ID', serialize=False, auto_created=True, primary_key=True)),
+                ('int1', models.IntegerField()),
+                ('int2', models.IntegerField()),
+                ('related_field', models.ForeignKey('postgres_tests.AggregateTestModel', null=True)),
+            ]
+        ),
     ]
+
+    pg_92_operations = [
+        migrations.CreateModel(
+            name='RangesModel',
+            fields=[
+                ('id', models.AutoField(verbose_name='ID', serialize=False, auto_created=True, primary_key=True)),
+                ('ints', IntegerRangeField(null=True, blank=True)),
+                ('bigints', BigIntegerRangeField(null=True, blank=True)),
+                ('floats', FloatRangeField(null=True, blank=True)),
+                ('timestamps', DateTimeRangeField(null=True, blank=True)),
+                ('dates', DateRangeField(null=True, blank=True)),
+            ],
+            options={
+                'required_db_vendor': 'postgresql',
+            },
+            bases=(models.Model,),
+        ),
+    ]
+
+    def apply(self, project_state, schema_editor, collect_sql=False):
+        try:
+            PG_VERSION = schema_editor.connection.pg_version
+        except AttributeError:
+            pass  # We are probably not on PostgreSQL
+        else:
+            if PG_VERSION >= 90200:
+                self.operations = self.operations + self.pg_92_operations
+        return super(Migration, self).apply(project_state, schema_editor, collect_sql)

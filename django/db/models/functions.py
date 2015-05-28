@@ -47,7 +47,9 @@ class ConcatPair(Func):
         return super(ConcatPair, self).as_sql(compiler, connection)
 
     def as_mysql(self, compiler, connection):
-        self.coalesce()
+        # Use CONCAT_WS with an empty separator so that NULLs are ignored.
+        self.function = 'CONCAT_WS'
+        self.template = "%(function)s('', %(expressions)s)"
         return super(ConcatPair, self).as_sql(compiler, connection)
 
     def coalesce(self):
@@ -110,13 +112,13 @@ class Substr(Func):
         pos: an integer > 0, or an expression returning an integer
         length: an optional number of characters to return
         """
-        if not hasattr('pos', 'resolve_expression'):
+        if not hasattr(pos, 'resolve_expression'):
             if pos < 1:
                 raise ValueError("'pos' must be greater than 0")
             pos = Value(pos)
         expressions = [expression, pos]
         if length is not None:
-            if not hasattr('length', 'resolve_expression'):
+            if not hasattr(length, 'resolve_expression'):
                 length = Value(length)
             expressions.append(length)
         super(Substr, self).__init__(*expressions, **extra)

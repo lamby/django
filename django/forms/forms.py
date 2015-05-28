@@ -4,22 +4,21 @@ Form classes
 
 from __future__ import unicode_literals
 
-from collections import OrderedDict
 import copy
 import datetime
-import warnings
+from collections import OrderedDict
 
-from django.core.exceptions import ValidationError, NON_FIELD_ERRORS
+from django.core.exceptions import NON_FIELD_ERRORS, ValidationError
 from django.forms.fields import Field, FileField
-from django.forms.utils import flatatt, ErrorDict, ErrorList
-from django.forms.widgets import Media, MediaDefiningClass, TextInput, Textarea
-from django.utils.deprecation import RemovedInDjango19Warning
-from django.utils.encoding import smart_text, force_text, python_2_unicode_compatible
-from django.utils.html import conditional_escape, format_html
+from django.forms.utils import ErrorDict, ErrorList, flatatt
+from django.forms.widgets import Media, MediaDefiningClass, Textarea, TextInput
+from django.utils import six
+from django.utils.encoding import (
+    force_text, python_2_unicode_compatible, smart_text,
+)
+from django.utils.html import conditional_escape, format_html, html_safe
 from django.utils.safestring import mark_safe
 from django.utils.translation import ugettext as _
-from django.utils import six
-
 
 __all__ = ('BaseForm', 'Form')
 
@@ -30,44 +29,7 @@ def pretty_name(name):
         return ''
     return name.replace('_', ' ').capitalize()
 
-
-def get_declared_fields(bases, attrs, with_base_fields=True):
-    """
-    Create a list of form field instances from the passed in 'attrs', plus any
-    similar fields on the base classes (in 'bases'). This is used by both the
-    Form and ModelForm metaclasses.
-
-    If 'with_base_fields' is True, all fields from the bases are used.
-    Otherwise, only fields in the 'declared_fields' attribute on the bases are
-    used. The distinction is useful in ModelForm subclassing.
-    Also integrates any additional media definitions.
-    """
-
-    warnings.warn(
-        "get_declared_fields is deprecated and will be removed in Django 1.9.",
-        RemovedInDjango19Warning,
-        stacklevel=2,
-    )
-
-    fields = [
-        (field_name, attrs.pop(field_name))
-        for field_name, obj in list(six.iteritems(attrs)) if isinstance(obj, Field)
-    ]
-    fields.sort(key=lambda x: x[1].creation_counter)
-
-    # If this class is subclassing another Form, add that Form's fields.
-    # Note that we loop over the bases in *reverse*. This is necessary in
-    # order to preserve the correct order of fields.
-    if with_base_fields:
-        for base in bases[::-1]:
-            if hasattr(base, 'base_fields'):
-                fields = list(six.iteritems(base.base_fields)) + fields
-    else:
-        for base in bases[::-1]:
-            if hasattr(base, 'declared_fields'):
-                fields = list(six.iteritems(base.declared_fields)) + fields
-
-    return OrderedDict(fields)
+UNSET = object()
 
 
 class DeclarativeFieldsMetaclass(MediaDefiningClass):
@@ -105,20 +67,25 @@ class DeclarativeFieldsMetaclass(MediaDefiningClass):
         return new_class
 
 
+@html_safe
 @python_2_unicode_compatible
 class BaseForm(object):
     # This is the main implementation of all the Form logic. Note that this
     # class is different than Form. See the comments by the Form class for more
     # information. Any improvements to the form API should be made to *this*
     # class, not to the Form class.
+    field_order = None
+    prefix = None
+
     def __init__(self, data=None, files=None, auto_id='id_%s', prefix=None,
                  initial=None, error_class=ErrorList, label_suffix=None,
-                 empty_permitted=False):
+                 empty_permitted=False, field_order=None):
         self.is_bound = data is not None or files is not None
         self.data = data or {}
         self.files = files or {}
         self.auto_id = auto_id
-        self.prefix = prefix
+        if prefix is not None:
+            self.prefix = prefix
         self.initial = initial or {}
         self.error_class = error_class
         # Translators: This is the default suffix added to form field labels
@@ -133,6 +100,30 @@ class BaseForm(object):
         # Instances should always modify self.fields; they should not modify
         # self.base_fields.
         self.fields = copy.deepcopy(self.base_fields)
+        self._bound_fields_cache = {}
+        self.order_fields(self.field_order if field_order is None else field_order)
+
+    def order_fields(self, field_order):
+        """
+        Rearranges the fields according to field_order.
+
+        field_order is a list of field names specifying the order. Fields not
+        included in the list are appended in the default order for backward
+        compatibility with subclasses not overriding field_order. If field_order
+        is None, all fields are kept in the order defined in the class.
+        Unknown fields in field_order are ignored to allow disabling fields in
+        form subclasses without redefining ordering.
+        """
+        if field_order is None:
+            return
+        fields = OrderedDict()
+        for key in field_order:
+            try:
+                fields[key] = self.fields.pop(key)
+            except KeyError:  # ignore unknown fields
+                pass
+        fields.update(self.fields)  # add remaining fields in original order
+        self.fields = fields
 
     def __str__(self):
         return self.as_table()
@@ -160,7 +151,9 @@ class BaseForm(object):
         except KeyError:
             raise KeyError(
                 "Key %r not found in '%s'" % (name, self.__class__.__name__))
-        return BoundField(self, field, name)
+        if name not in self._bound_fields_cache:
+            self._bound_fields_cache[name] = BoundField(self, field, name)
+        return self._bound_fields_cache[name]
 
     @property
     def errors(self):
@@ -251,9 +244,14 @@ class BaseForm(object):
                     # that users write): if there are only top errors, we may
                     # not be able to conscript the last row for our purposes,
                     # so insert a new, empty row.
-                    last_row = (normal_row % {'errors': '', 'label': '',
-                                              'field': '', 'help_text': '',
-                                              'html_class_attr': html_class_attr})
+                    last_row = (normal_row % {
+                        'errors': '',
+                        'label': '',
+                        'field': '',
+                        'help_text': '',
+                        'html_class_attr': html_class_attr,
+                        'field_name': '',
+                    })
                     output.append(last_row)
                 output[-1] = last_row[:-len(row_ender)] + str_hidden + row_ender
             else:
@@ -506,6 +504,7 @@ class Form(six.with_metaclass(DeclarativeFieldsMetaclass, BaseForm)):
     # BaseForm itself has no way of designating self.fields.
 
 
+@html_safe
 @python_2_unicode_compatible
 class BoundField(object):
     "A Field plus data"
@@ -521,6 +520,7 @@ class BoundField(object):
         else:
             self.label = self.field.label
         self.help_text = field.help_text or ''
+        self._initial_value = UNSET
 
     def __str__(self):
         """Renders this field as an HTML widget."""
@@ -615,12 +615,16 @@ class BoundField(object):
         if not self.form.is_bound:
             data = self.form.initial.get(self.name, self.field.initial)
             if callable(data):
-                data = data()
-                # If this is an auto-generated default date, nix the
-                # microseconds for standardized handling. See #22502.
-                if (isinstance(data, (datetime.datetime, datetime.time)) and
-                        not getattr(self.field.widget, 'supports_microseconds', True)):
-                    data = data.replace(microsecond=0)
+                if self._initial_value is not UNSET:
+                    data = self._initial_value
+                else:
+                    data = data()
+                    # If this is an auto-generated default date, nix the
+                    # microseconds for standardized handling. See #22502.
+                    if (isinstance(data, (datetime.datetime, datetime.time)) and
+                            not self.field.widget.supports_microseconds):
+                        data = data.replace(microsecond=0)
+                    self._initial_value = data
         else:
             data = self.field.bound_data(
                 self.data, self.form.initial.get(self.name, self.field.initial)

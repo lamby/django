@@ -1,0 +1,27 @@
+==========================
+Django 1.8.3 release notes
+==========================
+
+*Under development*
+
+Django 1.8.3 fixes several bugs in 1.8.2.
+
+Bugfixes
+========
+
+* Fixed ``BaseRangeField.prepare_value()`` to use each ``base_field``’s
+  ``prepare_value()`` method (:ticket:`24841`).
+
+* Fixed crash during :djadmin:`makemigrations` if a migrations module either
+  is missing ``__init__.py`` or is a file (:ticket:`24848`).
+
+* Fixed ``QuerySet.exists()`` returning incorrect results after annotation with
+  ``Count()`` (:ticket:`24835`).
+
+* Corrected ``HStoreField.has_changed()`` (:ticket:`24844`).
+
+* Reverted an optimization to the CSRF template context processor which caused
+  a regression (:ticket:`24836`).
+
+* Fixed a regression which caused template context processors to overwrite
+  variables set on a ``RequestContext`` after it's created (:ticket:`24847`).

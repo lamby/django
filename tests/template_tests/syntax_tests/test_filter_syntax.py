@@ -1,12 +1,10 @@
 # coding: utf-8
 from __future__ import unicode_literals
-import warnings
 
 from django.template import TemplateSyntaxError
 from django.test import SimpleTestCase
-from django.utils.deprecation import RemovedInDjango20Warning
 
-from ..utils import setup, SomeClass, SomeOtherException, UTF8Class
+from ..utils import SomeClass, SomeOtherException, UTF8Class, setup
 
 
 class FilterSyntaxTests(SimpleTestCase):
@@ -76,15 +74,13 @@ class FilterSyntaxTests(SimpleTestCase):
         with self.assertRaises(TemplateSyntaxError):
             self.engine.get_template('filter-syntax08')
 
-    @setup({'filter-syntax09': '{{ var|removetags:"b i"|upper|lower }}'})
+    @setup({'filter-syntax09': '{{ var|cut:"o"|upper|lower }}'})
     def test_filter_syntax09(self):
         """
         Chained filters, with an argument to the first one
         """
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore", RemovedInDjango20Warning)
-            output = self.engine.render_to_string('filter-syntax09', {'var': '<b><i>Yes</i></b>'})
-        self.assertEqual(output, 'yes')
+        output = self.engine.render_to_string('filter-syntax09', {'var': 'Foo'})
+        self.assertEqual(output, 'f')
 
     @setup({'filter-syntax10': r'{{ var|default_if_none:" endquote\" hah" }}'})
     def test_filter_syntax10(self):

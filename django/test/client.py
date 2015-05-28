@@ -1,9 +1,10 @@
 from __future__ import unicode_literals
 
-import sys
+import json
+import mimetypes
 import os
 import re
-import mimetypes
+import sys
 from copy import copy
 from importlib import import_module
 from io import BytesIO
@@ -12,20 +13,21 @@ from django.apps import apps
 from django.conf import settings
 from django.core import urlresolvers
 from django.core.handlers.base import BaseHandler
-from django.core.handlers.wsgi import WSGIRequest, ISO_8859_1, UTF_8
-from django.core.signals import (request_started, request_finished,
-    got_request_exception)
+from django.core.handlers.wsgi import ISO_8859_1, UTF_8, WSGIRequest
+from django.core.signals import (
+    got_request_exception, request_finished, request_started,
+)
 from django.db import close_old_connections
-from django.http import SimpleCookie, HttpRequest, QueryDict
+from django.http import HttpRequest, QueryDict, SimpleCookie
 from django.template import TemplateDoesNotExist
 from django.test import signals
-from django.utils.functional import curry, SimpleLazyObject
+from django.test.utils import ContextList
+from django.utils import six
 from django.utils.encoding import force_bytes, force_str, uri_to_iri
+from django.utils.functional import SimpleLazyObject, curry
 from django.utils.http import urlencode
 from django.utils.itercompat import is_iterable
-from django.utils import six
 from django.utils.six.moves.urllib.parse import urlparse, urlsplit
-from django.test.utils import ContextList
 
 __all__ = ('Client', 'RedirectCycleError', 'RequestFactory', 'encode_file', 'encode_multipart')
 
@@ -413,7 +415,7 @@ class Client(RequestFactory):
         """
         if apps.is_installed('django.contrib.sessions'):
             engine = import_module(settings.SESSION_ENGINE)
-            cookie = self.cookies.get(settings.SESSION_COOKIE_NAME, None)
+            cookie = self.cookies.get(settings.SESSION_COOKIE_NAME)
             if cookie:
                 return engine.SessionStore(cookie.value)
             else:
@@ -471,6 +473,8 @@ class Client(RequestFactory):
             # Add any rendered template detail to the response.
             response.templates = data.get("templates", [])
             response.context = data.get("context")
+
+            response.json = curry(self._parse_json, response)
 
             # Attach the ResolverMatch instance to the response
             response.resolver_match = SimpleLazyObject(
@@ -639,6 +643,11 @@ class Client(RequestFactory):
             request.session = engine.SessionStore()
         logout(request)
         self.cookies = SimpleCookie()
+
+    def _parse_json(self, response, **extra):
+        if 'application/json' not in response.get('Content-Type'):
+            raise ValueError('Content-Type header is "{0}", not "application/json"'.format(response.get('Content-Type')))
+        return json.loads(response.content.decode(), **extra)
 
     def _handle_redirects(self, response, **extra):
         "Follows any redirects by requesting responses from the server using GET."

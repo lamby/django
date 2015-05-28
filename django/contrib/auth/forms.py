@@ -1,8 +1,13 @@
 from __future__ import unicode_literals
 
-from collections import OrderedDict
-
 from django import forms
+from django.contrib.auth import authenticate, get_user_model
+from django.contrib.auth.hashers import (
+    UNUSABLE_PASSWORD_PREFIX, identify_hasher,
+)
+from django.contrib.auth.models import User
+from django.contrib.auth.tokens import default_token_generator
+from django.contrib.sites.shortcuts import get_current_site
 from django.core.mail import EmailMultiAlternatives
 from django.forms.utils import flatatt
 from django.template import loader
@@ -12,21 +17,6 @@ from django.utils.http import urlsafe_base64_encode
 from django.utils.safestring import mark_safe
 from django.utils.text import capfirst
 from django.utils.translation import ugettext, ugettext_lazy as _
-
-from django.contrib.auth import authenticate, get_user_model
-from django.contrib.auth.models import User
-from django.contrib.auth.hashers import UNUSABLE_PASSWORD_PREFIX, identify_hasher
-from django.contrib.auth.tokens import default_token_generator
-from django.contrib.sites.shortcuts import get_current_site
-
-
-UNMASKED_DIGITS_TO_SHOW = 6
-
-
-def mask_password(password):
-    shown = password[:UNMASKED_DIGITS_TO_SHOW]
-    masked = "*" * max(len(password) - UNMASKED_DIGITS_TO_SHOW, 0)
-    return shown + masked
 
 
 class ReadOnlyPasswordHashWidget(forms.Widget):
@@ -108,7 +98,7 @@ class UserChangeForm(forms.ModelForm):
     password = ReadOnlyPasswordHashField(label=_("Password"),
         help_text=_("Raw passwords are not stored, so there is no way to see "
                     "this user's password, but you can change the password "
-                    "using <a href=\"password/\">this form</a>."))
+                    "using <a href=\"../password/\">this form</a>."))
 
     class Meta:
         model = User
@@ -116,7 +106,7 @@ class UserChangeForm(forms.ModelForm):
 
     def __init__(self, *args, **kwargs):
         super(UserChangeForm, self).__init__(*args, **kwargs)
-        f = self.fields.get('user_permissions', None)
+        f = self.fields.get('user_permissions')
         if f is not None:
             f.queryset = f.queryset.select_related('content_type')
 
@@ -311,6 +301,8 @@ class PasswordChangeForm(SetPasswordForm):
     old_password = forms.CharField(label=_("Old password"),
                                    widget=forms.PasswordInput)
 
+    field_order = ['old_password', 'new_password1', 'new_password2']
+
     def clean_old_password(self):
         """
         Validates that the old_password field is correct.
@@ -322,11 +314,6 @@ class PasswordChangeForm(SetPasswordForm):
                 code='password_incorrect',
             )
         return old_password
-
-PasswordChangeForm.base_fields = OrderedDict(
-    (k, PasswordChangeForm.base_fields[k])
-    for k in ['old_password', 'new_password1', 'new_password2']
-)
 
 
 class AdminPasswordChangeForm(forms.Form):

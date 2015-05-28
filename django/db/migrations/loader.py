@@ -1,15 +1,16 @@
 from __future__ import unicode_literals
 
-from importlib import import_module
 import os
 import sys
+from importlib import import_module
 
 from django.apps import apps
-from django.db.migrations.recorder import MigrationRecorder
-from django.db.migrations.graph import MigrationGraph, NodeNotFoundError
-from django.utils import six
 from django.conf import settings
+from django.db.migrations.graph import MigrationGraph
+from django.db.migrations.recorder import MigrationRecorder
+from django.utils import six
 
+from .exceptions import AmbiguityError, BadMigrationError, NodeNotFoundError
 
 MIGRATIONS_MODULE_NAME = 'migrations'
 
@@ -78,9 +79,11 @@ class MigrationLoader(object):
             else:
                 # PY3 will happily import empty dirs as namespaces.
                 if not hasattr(module, '__file__'):
+                    self.unmigrated_apps.add(app_config.label)
                     continue
                 # Module is not a package (e.g. migrations.py).
                 if not hasattr(module, '__path__'):
+                    self.unmigrated_apps.add(app_config.label)
                     continue
                 # Force a reload if it's already loaded (tests need this)
                 if was_loaded:
@@ -194,7 +197,7 @@ class MigrationLoader(object):
         for key, migration in normal.items():
             for parent in migration.dependencies:
                 reverse_dependencies.setdefault(parent, set()).add(key)
-        # Remeber the possible replacements to generate more meaningful error
+        # Remember the possible replacements to generate more meaningful error
         # messages
         reverse_replacements = {}
         for key, migration in replacing.items():
@@ -325,17 +328,3 @@ class MigrationLoader(object):
         See graph.make_state for the meaning of "nodes" and "at_end"
         """
         return self.graph.make_state(nodes=nodes, at_end=at_end, real_apps=list(self.unmigrated_apps))
-
-
-class BadMigrationError(Exception):
-    """
-    Raised when there's a bad migration (unreadable/bad format/etc.)
-    """
-    pass
-
-
-class AmbiguityError(Exception):
-    """
-    Raised when more than one migration matches a name prefix
-    """
-    pass

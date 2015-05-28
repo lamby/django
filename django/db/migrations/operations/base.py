@@ -1,4 +1,5 @@
 from __future__ import unicode_literals
+
 from django.db import router
 
 
@@ -98,17 +99,17 @@ class Operation(object):
         """
         return self.references_model(model_name, app_label)
 
-    def allowed_to_migrate(self, connection_alias, model):
+    def allow_migrate_model(self, connection_alias, model):
         """
-        Returns if we're allowed to migrate the model. Checks the router,
-        if it's a proxy, if it's managed, and if it's swapped out.
+        Returns if we're allowed to migrate the model.
+
+        This is a thin wrapper around router.allow_migrate_model() that
+        preemptively rejects any proxy, swapped out, or unmanaged model.
         """
-        return (
-            not model._meta.proxy and
-            not model._meta.swapped and
-            model._meta.managed and
-            router.allow_migrate(connection_alias, model)
-        )
+        if not model._meta.can_migrate(connection_alias):
+            return False
+
+        return router.allow_migrate_model(connection_alias, model)
 
     def __repr__(self):
         return "<%s %s%s>" % (

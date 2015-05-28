@@ -1,11 +1,9 @@
 import copy
 import operator
-from functools import wraps
 import sys
-import warnings
+from functools import wraps
 
 from django.utils import six
-from django.utils.deprecation import RemovedInDjango19Warning
 from django.utils.six.moves import copyreg
 
 
@@ -16,29 +14,6 @@ def curry(_curried_func, *args, **kwargs):
     def _curried(*moreargs, **morekwargs):
         return _curried_func(*(args + moreargs), **dict(kwargs, **morekwargs))
     return _curried
-
-
-def memoize(func, cache, num_args):
-    """
-    Wrap a function so that results for any argument tuple are stored in
-    'cache'. Note that the args to the function must be usable as dictionary
-    keys.
-
-    Only the first num_args are considered when creating the key.
-    """
-    warnings.warn("memoize wrapper is deprecated and will be removed in "
-                  "Django 1.9. Use django.utils.lru_cache instead.",
-                  RemovedInDjango19Warning, stacklevel=2)
-
-    @wraps(func)
-    def wrapper(*args):
-        mem_args = args[:num_args]
-        if mem_args in cache:
-            return cache[mem_args]
-        result = func(*args)
-        cache[mem_args] = result
-        return result
-    return wrapper
 
 
 class cached_property(object):
@@ -120,6 +95,7 @@ def lazy(func, *resultclasses):
                     cls.__str__ = cls.__text_cast
                 else:
                     cls.__unicode__ = cls.__text_cast
+                    cls.__str__ = cls.__bytes_cast_encoded
             elif cls._delegate_bytes:
                 if six.PY3:
                     cls.__bytes__ = cls.__bytes_cast
@@ -141,6 +117,9 @@ def lazy(func, *resultclasses):
 
         def __bytes_cast(self):
             return bytes(func(*self.__args, **self.__kw))
+
+        def __bytes_cast_encoded(self):
+            return func(*self.__args, **self.__kw).encode('utf-8')
 
         def __cast(self):
             if self._delegate_bytes:
@@ -201,14 +180,16 @@ def allow_lazy(func, *resultclasses):
     immediately, otherwise a __proxy__ is returned that will evaluate the
     function when needed.
     """
+    lazy_func = lazy(func, *resultclasses)
+
     @wraps(func)
     def wrapper(*args, **kwargs):
-        for arg in list(args) + list(six.itervalues(kwargs)):
+        for arg in list(args) + list(kwargs.values()):
             if isinstance(arg, Promise):
                 break
         else:
             return func(*args, **kwargs)
-        return lazy(func, *resultclasses)(*args, **kwargs)
+        return lazy_func(*args, **kwargs)
     return wrapper
 
 empty = object()
@@ -317,11 +298,11 @@ class LazyObject(object):
     __ne__ = new_method_proxy(operator.ne)
     __hash__ = new_method_proxy(hash)
 
-    # Dictionary methods support
+    # List/Tuple/Dictionary methods support
     __getitem__ = new_method_proxy(operator.getitem)
     __setitem__ = new_method_proxy(operator.setitem)
     __delitem__ = new_method_proxy(operator.delitem)
-
+    __iter__ = new_method_proxy(iter)
     __len__ = new_method_proxy(len)
     __contains__ = new_method_proxy(operator.contains)
 

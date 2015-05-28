@@ -1,5 +1,5 @@
 from django.conf import settings
-from django.contrib.sessions.backends.base import SessionBase, CreateError
+from django.contrib.sessions.backends.base import CreateError, SessionBase
 from django.core.cache import caches
 from django.utils.six.moves import range
 
@@ -20,7 +20,7 @@ class SessionStore(SessionBase):
 
     def load(self):
         try:
-            session_data = self._cache.get(self.cache_key, None)
+            session_data = self._cache.get(self.cache_key)
         except Exception:
             # Some backends (e.g. memcache) raise an exception on invalid
             # cache keys. If this happens, reset the session. See #17810.

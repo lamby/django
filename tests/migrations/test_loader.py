@@ -2,12 +2,11 @@ from __future__ import unicode_literals
 
 from unittest import skipIf
 
-from django.test import TestCase, override_settings
 from django.db import connection, connections
-from django.db.migrations.graph import NodeNotFoundError
-from django.db.migrations.loader import MigrationLoader, AmbiguityError
+from django.db.migrations.exceptions import AmbiguityError, NodeNotFoundError
+from django.db.migrations.loader import MigrationLoader
 from django.db.migrations.recorder import MigrationRecorder
-from django.test import modify_settings
+from django.test import TestCase, modify_settings, override_settings
 from django.utils import six
 
 
@@ -159,18 +158,26 @@ class LoaderTests(TestCase):
             migration_loader.get_migration_by_prefix("migrations", "blarg")
 
     def test_load_import_error(self):
-        with override_settings(MIGRATION_MODULES={"migrations": "migrations.faulty_migrations.import_error"}):
+        with override_settings(MIGRATION_MODULES={"migrations": "import_error_package"}):
             with self.assertRaises(ImportError):
                 MigrationLoader(connection)
 
     def test_load_module_file(self):
         with override_settings(MIGRATION_MODULES={"migrations": "migrations.faulty_migrations.file"}):
-            MigrationLoader(connection)
+            loader = MigrationLoader(connection)
+            self.assertIn(
+                "migrations", loader.unmigrated_apps,
+                "App with migrations module file not in unmigrated apps."
+            )
 
     @skipIf(six.PY2, "PY2 doesn't load empty dirs.")
     def test_load_empty_dir(self):
         with override_settings(MIGRATION_MODULES={"migrations": "migrations.faulty_migrations.namespace"}):
-            MigrationLoader(connection)
+            loader = MigrationLoader(connection)
+            self.assertIn(
+                "migrations", loader.unmigrated_apps,
+                "App missing __init__.py in migrations module not in unmigrated apps."
+            )
 
     @override_settings(MIGRATION_MODULES={"migrations": "migrations.test_migrations_squashed"})
     def test_loading_squashed(self):
